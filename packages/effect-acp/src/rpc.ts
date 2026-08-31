@@ -65,6 +65,12 @@ const PromptRpc = Rpc.make(AGENT_METHODS.session_prompt, {
   error: AcpSchema.Error,
 });
 
+const SetSessionModeRpc = Rpc.make(AGENT_METHODS.session_set_mode, {
+  payload: AcpSchema.SetSessionModeRequest,
+  success: AcpSchema.SetSessionModeResponse,
+  error: AcpSchema.Error,
+});
+
 const SetSessionModelRpc = Rpc.make(AGENT_METHODS.session_set_model, {
   payload: AcpSchema.SetSessionModelRequest,
   success: AcpSchema.SetSessionModelResponse,
@@ -156,6 +162,7 @@ export const AgentRpcs = RpcGroup.make(
   ResumeSessionRpc,
   CloseSessionRpc,
   PromptRpc,
+  SetSessionModeRpc,
   SetSessionModelRpc,
   SetSessionConfigOptionRpc,
 );
