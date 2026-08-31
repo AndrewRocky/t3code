@@ -7,6 +7,7 @@ import {
   ClientSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
+  HermesSettings,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -19,6 +20,7 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
 
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
@@ -315,6 +317,36 @@ describe("ClientSettings chat width", () => {
   it("rejects unsupported widths", () => {
     expect(() => decodeClientSettings({ chatWidth: "huge" })).toThrow();
     expect(() => decodeClientSettingsPatch({ chatWidth: "huge" })).toThrow();
+  });
+});
+
+describe("HermesSettings command allow/deny lists", () => {
+  it("defaults both lists to empty", () => {
+    const settings = decodeHermesSettings({});
+    expect(settings.commandAllowlist).toEqual([]);
+    expect(settings.commandDenylist).toEqual([]);
+  });
+
+  it("decodes configured glob patterns for both lists", () => {
+    const settings = decodeHermesSettings({
+      commandAllowlist: ["git status*", "cargo test*"],
+      commandDenylist: ["sudo *", "rm -rf *"],
+    });
+    expect(settings.commandAllowlist).toEqual(["git status*", "cargo test*"]);
+    expect(settings.commandDenylist).toEqual(["sudo *", "rm -rf *"]);
+  });
+
+  it("accepts both lists at the settings patch boundary", () => {
+    const patched = decodeServerSettingsPatch({
+      providers: {
+        hermes: {
+          commandAllowlist: ["git status*"],
+          commandDenylist: ["sudo *"],
+        },
+      },
+    });
+    expect(patched.providers?.hermes?.commandAllowlist).toEqual(["git status*"]);
+    expect(patched.providers?.hermes?.commandDenylist).toEqual(["sudo *"]);
   });
 });
 

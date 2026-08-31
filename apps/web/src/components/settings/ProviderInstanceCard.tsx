@@ -18,11 +18,11 @@ import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  ProviderDriverKind,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
-  type ProviderDriverKind,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -47,6 +47,7 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon, providerInstanceInitials } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
+import { HermesCommandRulesSection } from "./HermesCommandRulesSection";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -128,6 +129,18 @@ function providerEnvironmentsEqual(
 function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
   if (config === null || typeof config !== "object") return [];
   return readCustomModelEntries((config as Record<string, unknown>).customModels);
+}
+
+/**
+ * Read a plain `string[]` field from the opaque config blob. `customModels`
+ * has its own reader because its entries are objects; Hermes' command rules
+ * are bare glob patterns, so they only need shape checking.
+ */
+function readConfigStringArray(config: unknown, key: string): ReadonlyArray<string> {
+  if (config === null || typeof config !== "object") return [];
+  const value = (config as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 /**
@@ -506,6 +519,9 @@ export function ProviderInstanceCard({
     : null;
   const customModels =
     instance.driver === "antigravity" ? [] : readConfigCustomModels(instance.config);
+  const isHermesInstance = driverKind === ProviderDriverKind.make("hermes");
+  const commandAllowlist = readConfigStringArray(instance.config, "commandAllowlist");
+  const commandDenylist = readConfigStringArray(instance.config, "commandDenylist");
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -552,6 +568,18 @@ export function ProviderInstanceCard({
       "customModels",
       next.map(toCustomModelSetting),
     );
+    const { config: _omit, ...rest } = instance;
+    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  const updateCommandAllowlist = (next: ReadonlyArray<string>) => {
+    const nextConfig = nextConfigBlobWithValue(instance.config, "commandAllowlist", [...next]);
+    const { config: _omit, ...rest } = instance;
+    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  const updateCommandDenylist = (next: ReadonlyArray<string>) => {
+    const nextConfig = nextConfigBlobWithValue(instance.config, "commandDenylist", [...next]);
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
@@ -951,6 +979,25 @@ export function ProviderInstanceCard({
           {runtimeFields}
         </SettingsSection>
       )}
+
+      {isHermesInstance ? (
+        <SettingsSection
+          title="Command rules"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <div className="px-3 py-3 sm:px-4">
+            <HermesCommandRulesSection
+              instanceId={instanceId}
+              commandAllowlist={commandAllowlist}
+              commandDenylist={commandDenylist}
+              onCommandAllowlistChange={updateCommandAllowlist}
+              onCommandDenylistChange={updateCommandDenylist}
+            />
+          </div>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection
         title="Environment"
