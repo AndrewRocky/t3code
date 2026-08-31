@@ -147,6 +147,7 @@ const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
+const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
 export const DEFAULT_MODEL = "gpt-5.6-sol";
@@ -171,6 +172,10 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [CURSOR_DRIVER_KIND]: "auto",
   // Product slug, not an ACP model id. The Grok adapter treats it as "the session's current model".
   [GROK_DRIVER_KIND]: "grok-build",
+  // Hermes model ids are `<provider>:<model>` (server.py `_encode_model_choice`).
+  // Its own silent default is GLM on OpenRouter; the live catalog from
+  // `session/new` replaces this the moment a session starts.
+  [HERMES_DRIVER_KIND]: "openrouter:z-ai/glm-5.2",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
 };
@@ -220,5 +225,6 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [CLAUDE_DRIVER_KIND]: "Claude",
   [CURSOR_DRIVER_KIND]: "Cursor",
   [GROK_DRIVER_KIND]: "Grok",
+  [HERMES_DRIVER_KIND]: "Hermes",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
 };

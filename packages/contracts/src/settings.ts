@@ -710,6 +710,56 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
+export const HermesSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor, Grok, and OpenCode): Hermes ships ACP as an
+    // optional extra (`pip install -e '.[acp]'`), so probing every install
+    // would spawn a CLI that may not have the adapter. Users opt in from
+    // Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("hermes").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Hermes CLI binary.",
+        providerSettingsForm: { placeholder: "hermes", clearWhenEmpty: "omit" },
+      }),
+    ),
+    homePath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "HERMES_HOME path",
+        description:
+          "Custom Hermes home directory holding config.yaml, auth.json, state.db, and skills.",
+        providerSettingsForm: { placeholder: "~/.hermes", clearWhenEmpty: "omit" },
+      }),
+    ),
+    // Hermes starts every configured MCP server from `config.yaml` before it
+    // answers the first JSON-RPC frame. On a large MCP set that startup cost
+    // lands on session start, so the adapter can ask Hermes to skip them and
+    // rely on the session-scoped servers T3 Code passes through `session/new`.
+    skipConfiguredMcpServers: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Skip config.yaml MCP servers",
+        description:
+          "Start ACP sessions without Hermes' own configured MCP servers. Session-scoped servers still load.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "homePath", "skipConfiguredMcpServers"],
+  },
+);
+export type HermesSettings = typeof HermesSettings.Type;
+
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor and Grok): the binding is not yet stable
@@ -963,6 +1013,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    hermes: HermesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -1129,6 +1180,14 @@ const AntigravitySettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const HermesSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  homePath: Schema.optionalKey(TrimmedString),
+  skipConfiguredMcpServers: Schema.optionalKey(Schema.Boolean),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
 const OpenCodeSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
@@ -1193,6 +1252,7 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
+      hermes: Schema.optionalKey(HermesSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
     }),
