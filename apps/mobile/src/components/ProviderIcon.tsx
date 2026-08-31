@@ -1,4 +1,4 @@
-import { Path, Svg } from "react-native-svg";
+import { Circle, Path, Svg } from "react-native-svg";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
 type ProviderIconProps = {
@@ -34,6 +34,33 @@ export function ProviderIcon(props: ProviderIconProps) {
         <Path
           fill={fill}
           d="M7.62249 16.7237C4.83113 14.0422 5.3124 9.89222 7.69417 7.49905C9.45541 5.72786 12.341 5.00497 14.86 6.06768L17.5653 4.81138C17.0779 4.45714 16.4533 4.07613 15.7365 3.80839C12.4966 2.46764 8.6178 3.13492 5.98413 5.78141C3.45081 8.32904 2.65415 12.2463 4.02219 15.5889C5.04412 18.0871 3.36889 19.8541 1.68137 21.6377C1.08337 22.2699 0.483318 22.9022 0 23.5716L7.62045 16.7257"
+        />
+      </Svg>
+    );
+  }
+
+  if (props.provider === "hermes") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        {/* Wings */}
+        <Path d="M11.4 6.3C9.4 4.7 6.7 4.3 4.1 5.1C6.1 6.5 8.5 7.3 11.4 7.7Z" fill={mono} />
+        <Path d="M12.6 6.3C14.6 4.7 17.3 4.3 19.9 5.1C17.9 6.5 15.5 7.3 12.6 7.7Z" fill={mono} />
+        {/* Orb */}
+        <Circle cx={12} cy={3.4} r={1.5} fill={mono} />
+        {/* Staff */}
+        <Path d="M12 5.6V21.4" stroke={mono} strokeWidth={1.5} strokeLinecap="round" />
+        {/* Entwined serpents */}
+        <Path
+          d="M12 9C8.6 9.6 8.6 12.4 12 13C15.4 13.6 15.4 16.4 12 17"
+          stroke={mono}
+          strokeWidth={1.4}
+          strokeLinecap="round"
+        />
+        <Path
+          d="M12 9C15.4 9.6 15.4 12.4 12 13C8.6 13.6 8.6 16.4 12 17"
+          stroke={mono}
+          strokeWidth={1.4}
+          strokeLinecap="round"
         />
       </Svg>
     );

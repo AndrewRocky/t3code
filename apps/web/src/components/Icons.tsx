@@ -214,6 +214,45 @@ export const GrokIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+/**
+ * Hermes Agent. Drawn as the caduceus the project uses as its wordmark
+ * (`Hermes Agent ☤`): winged staff, orb, and the two entwined serpents.
+ * Strokes rather than fills, so the mark keeps even weight at 16px; the
+ * colour comes from `currentColor` and the theme classes below.
+ */
+export const HermesIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    fill="none"
+    className={cn("text-[#0F0F0F] dark:text-[#F5F5F5]", className)}
+  >
+    {/* Wings */}
+    <path d="M11.4 6.3C9.4 4.7 6.7 4.3 4.1 5.1C6.1 6.5 8.5 7.3 11.4 7.7Z" fill="currentColor" />
+    <path
+      d="M12.6 6.3C14.6 4.7 17.3 4.3 19.9 5.1C17.9 6.5 15.5 7.3 12.6 7.7Z"
+      fill="currentColor"
+    />
+    {/* Orb */}
+    <circle cx="12" cy="3.4" r="1.5" fill="currentColor" />
+    {/* Staff */}
+    <path d="M12 5.6V21.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    {/* Entwined serpents */}
+    <path
+      d="M12 9C8.6 9.6 8.6 12.4 12 13C15.4 13.6 15.4 16.4 12 17"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+    />
+    <path
+      d="M12 9C15.4 9.6 15.4 12.4 12 13C8.6 13.6 8.6 16.4 12 17"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 export const TraeIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 24 24" fill="currentColor">
     {/* Back rectangle: left strip + bottom strip drawn separately — empty bottom-left corner is the gap between them */}
