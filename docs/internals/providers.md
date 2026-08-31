@@ -120,6 +120,19 @@ Hermes also emits three notifications the shared runtime model does not parse â€
 registers a second raw `session/update` handler for them (handlers are appended, not replaced) and
 re-emits them as `thread.token-usage.updated` and `thread.metadata.updated`.
 
+**Command-level approval granularity has no ACP surface.** Hermes' `initialize` response advertises
+no config option for it, so the only way to reach Hermes' own `command_allowlist` /
+`approvals.deny` (`tools/approval.py check_dangerous_command`, checked before Hermes ever calls
+`session/request_permission`) is the `config.yaml` file it reads at startup, mtime-cached so an edit
+mid-session takes effect without a restart. [`HermesCommandRules.ts`][hermes-command-rules]
+additively merges `HermesSettings.commandAllowlist`/`commandDenylist` into that file's
+`command_allowlist` root key and `approvals.deny`, right before `startSession` spawns the process.
+"Additively" is load-bearing: Hermes itself appends to `command_allowlist` when a user answers
+"Allow always" to a live prompt, and an administrator may hand-edit either list directly, so a sync
+that replaced either wholesale could erase trust neither T3 nor its own settings granted. The merge
+only ever adds a pattern present in settings but absent from the file â€” removing a pattern from
+settings does not delete it from `config.yaml`.
+
 ## Attachment access
 
 The server stores uploaded attachments in its attachment directory, outside the project workspace.
@@ -198,6 +211,7 @@ when a request opens (approval) or user input is requested, via
 [acp]: https://agentclientprotocol.com/
 [acp-runtime]: ../../apps/server/src/provider/acp/AcpSessionRuntime.ts
 [hermes-adapter]: ../../apps/server/src/provider/Layers/HermesAdapter.ts
+[hermes-command-rules]: ../../apps/server/src/provider/Drivers/HermesCommandRules.ts
 [instances]: ../../apps/server/src/provider/Services/ProviderInstanceRegistry.ts
 [registry]: ../../apps/server/src/provider/Services/ProviderAdapterRegistry.ts
 [service]: ../../apps/server/src/provider/Layers/ProviderService.ts

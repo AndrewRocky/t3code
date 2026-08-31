@@ -563,6 +563,34 @@ export const HermesSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
+    // `fnmatch` glob patterns written into `command_allowlist` at the root of
+    // Hermes' own config.yaml. Hermes checks this list itself, inside its
+    // process, before a shell command ever reaches `session/request_permission`
+    // — a matching command runs with no round-trip to T3 Code at all. This is
+    // additive-only on the T3 side: Hermes also appends to this same key
+    // whenever a user answers "Allow always" to a live approval prompt
+    // (`tools/approval.py save_permanent_allowlist`), so T3 unions its
+    // configured patterns into the file instead of replacing it outright,
+    // and never removes an entry it did not itself add. Matching is
+    // case-sensitive and skips any command containing shell operators
+    // (`&&`, `;`, `$(...)`, pipes, etc.) even if the plain-text prefix would
+    // otherwise match — Hermes treats a compound command as unsafe to shortcut.
+    commandAllowlist: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    // `fnmatch` glob patterns written into `approvals.deny` in Hermes'
+    // config.yaml. Unlike the allowlist, nothing on the Hermes side ever
+    // writes to this key, so T3 fully owns and replaces it from this setting
+    // on every sync. A match blocks the command unconditionally, inside
+    // Hermes' own process — even under Full access, even if the runtime mode
+    // would otherwise auto-approve it, and even under Hermes' own `--yolo`.
+    // Matching is case-insensitive and runs over deobfuscated command
+    // variants, so simple quoting tricks cannot dodge it.
+    commandDenylist: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
   },
   {
     order: ["binaryPath", "homePath", "skipConfiguredMcpServers"],
@@ -927,6 +955,8 @@ const HermesSettingsPatch = Schema.Struct({
   homePath: Schema.optionalKey(TrimmedString),
   skipConfiguredMcpServers: Schema.optionalKey(Schema.Boolean),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  commandAllowlist: Schema.optionalKey(Schema.Array(Schema.String)),
+  commandDenylist: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 const OpenCodeSettingsPatch = Schema.Struct({

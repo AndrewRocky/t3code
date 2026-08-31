@@ -8,6 +8,7 @@ import {
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   defaultEnabledForDriver,
+  HermesSettings,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -19,6 +20,7 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
 
 describe("ClaudeSettings auto-compaction", () => {
   it("uses Claude's default threshold when no override is configured", () => {
@@ -46,6 +48,36 @@ describe("ClaudeSettings auto-compaction", () => {
     expect(
       decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300000" } } }),
     ).toBeDefined();
+  });
+});
+
+describe("HermesSettings command allow/deny lists", () => {
+  it("defaults both lists to empty", () => {
+    const settings = decodeHermesSettings({});
+    expect(settings.commandAllowlist).toEqual([]);
+    expect(settings.commandDenylist).toEqual([]);
+  });
+
+  it("decodes configured glob patterns for both lists", () => {
+    const settings = decodeHermesSettings({
+      commandAllowlist: ["git status*", "cargo test*"],
+      commandDenylist: ["sudo *", "rm -rf *"],
+    });
+    expect(settings.commandAllowlist).toEqual(["git status*", "cargo test*"]);
+    expect(settings.commandDenylist).toEqual(["sudo *", "rm -rf *"]);
+  });
+
+  it("accepts both lists at the settings patch boundary", () => {
+    const patched = decodeServerSettingsPatch({
+      providers: {
+        hermes: {
+          commandAllowlist: ["git status*"],
+          commandDenylist: ["sudo *"],
+        },
+      },
+    });
+    expect(patched.providers?.hermes?.commandAllowlist).toEqual(["git status*"]);
+    expect(patched.providers?.hermes?.commandDenylist).toEqual(["sudo *"]);
   });
 });
 

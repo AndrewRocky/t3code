@@ -14,11 +14,11 @@ import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  ProviderDriverKind,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
-  type ProviderDriverKind,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -42,6 +42,7 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon, providerInstanceInitials } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
+import { HermesCommandRulesSection } from "./HermesCommandRulesSection";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -482,6 +483,9 @@ export function ProviderInstanceCard({
   const visibleTab = driverOption === undefined ? "configuration" : activeTab;
 
   const customModels = readConfigStringArray(instance.config, "customModels");
+  const isHermesInstance = driverKind === ProviderDriverKind.make("hermes");
+  const commandAllowlist = readConfigStringArray(instance.config, "commandAllowlist");
+  const commandDenylist = readConfigStringArray(instance.config, "commandDenylist");
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -525,6 +529,18 @@ export function ProviderInstanceCard({
 
   const updateCustomModels = (next: ReadonlyArray<string>) => {
     const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
+    const { config: _omit, ...rest } = instance;
+    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  const updateCommandAllowlist = (next: ReadonlyArray<string>) => {
+    const nextConfig = nextConfigBlobWithValue(instance.config, "commandAllowlist", [...next]);
+    const { config: _omit, ...rest } = instance;
+    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+  };
+
+  const updateCommandDenylist = (next: ReadonlyArray<string>) => {
+    const nextConfig = nextConfigBlobWithValue(instance.config, "commandDenylist", [...next]);
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
@@ -888,6 +904,18 @@ export function ProviderInstanceCard({
                 onChange={updateEnvironment}
               />
             </div>
+
+            {isHermesInstance ? (
+              <div>
+                <HermesCommandRulesSection
+                  instanceId={instanceId}
+                  commandAllowlist={commandAllowlist}
+                  commandDenylist={commandDenylist}
+                  onCommandAllowlistChange={updateCommandAllowlist}
+                  onCommandDenylistChange={updateCommandDenylist}
+                />
+              </div>
+            ) : null}
 
             {driverOption ? (
               <ProviderSettingsForm

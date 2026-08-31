@@ -49,9 +49,36 @@ set to always-approve, and **Full access** starts Grok with always-approve.
 
 Hermes is worth calling out because its own modes cover file edits only. **Supervised** asks before
 every edit, **Auto-accept edits** auto-allows edits inside the workspace and the temp directory, and
-**Full access** auto-allows edits anywhere. In all three, Hermes still refuses to touch sensitive
-paths unasked — anything under `.git` or `.ssh`, and `.env*` / `id_rsa` / `id_ed25519` files — and
-shell commands always request approval from T3 Code, which only **Full access** answers for you.
+**Full access** auto-allows edits anywhere. Under **Supervised** and **Auto-accept edits**, Hermes
+still asks before touching a sensitive path regardless of the edit otherwise being auto-allowed —
+anything under `.git` or `.ssh`, and `.env*` / `id_rsa` / `id_ed25519` files. **Full access** does
+not carve out an exception for this: it auto-answers every prompt T3 Code receives, sensitive-path
+edits included. Shell commands always request approval from T3 Code regardless of mode, which is
+why **Full access** is the only mode that answers them for you.
+
+### Limiting Hermes to specific commands
+
+Hermes' modes have no notion of "auto-approve this command but not that one" — it is edits-vs-not,
+full stop. Hermes does have finer-grained command control, but it lives entirely on Hermes' side of
+the connection, in its own `config.yaml`: a `command_allowlist` of glob patterns that run without
+ever generating a prompt, and an `approvals.deny` list of patterns that are refused no matter what
+T3 Code's permission mode is set to — including **Full access**.
+
+The Hermes provider's settings expose both lists (**Command rules**, on the provider instance's
+configuration tab): **Always allow** patterns and **Always block** patterns, each written into
+Hermes' `config.yaml` the next time a session starts. This is the practical middle ground for
+running Hermes against a smaller local model — one you trust less to make its own judgment calls
+but don't want interrupting you for every routine command: allowlist the commands you already trust
+(`git status*`, `cargo test*`, a build script) so they run without a prompt in any mode, denylist
+the ones that should never run (`sudo *`, `rm -rf *`), and leave everything else asking as normal.
+
+Two things worth knowing about how the lists behave: T3 Code only ever adds patterns to these lists,
+it never removes one. Hermes itself appends to `command_allowlist` whenever you answer "Allow
+always" to a live prompt, and you can hand-edit either list directly in `config.yaml` — a sync that
+deleted entries T3 didn't add could silently undo trust another actor granted, so removing a pattern
+for good means editing `config.yaml` (or clearing the field) rather than removing it from Settings.
+And an allowlist match only ever applies to a plain command — one with no `&&`, `;`, pipes, or
+`$(...)` — so a compound command can't sneak an unapproved step in behind an allowlisted prefix.
 
 The labels above describe what you get; the exact per-provider translation is internal and may
 change.
