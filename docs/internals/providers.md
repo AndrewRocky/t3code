@@ -7,7 +7,7 @@ orchestration layer does not know which one is behind a thread.
 
 ## Built-in drivers
 
-[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with five entries:
+[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with six entries:
 
 | Driver kind   | Driver source                           |
 | ------------- | --------------------------------------- |
@@ -15,6 +15,7 @@ orchestration layer does not know which one is behind a thread.
 | `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]     |
 | `cursor`      | [`Drivers/CursorDriver.ts`][cursor]     |
 | `grok`        | [`Drivers/GrokDriver.ts`][grok]         |
+| `hermes`      | [`Drivers/HermesDriver.ts`][hermes]     |
 | `opencode`    | [`Drivers/OpenCodeDriver.ts`][opencode] |
 
 Each driver declares its `driverKind`, a `configSchema`, and a `create` function that builds an
@@ -95,14 +96,40 @@ probes, respect the `enableProviderUpdateChecks` setting, and never fail a provi
 Codex and Claude drivers apply the classification to every snapshot with `applyModelManifest`;
 driver kinds absent from the manifest have no legacy concept.
 
+## ACP providers
+
+Cursor, Grok, and Hermes all speak the [Agent Client Protocol][acp] over stdio, and share the
+machinery in `apps/server/src/provider/acp/` — [`AcpSessionRuntime.ts`][acp-runtime] owns the
+connection and session lifecycle, `AcpRuntimeModel.ts` parses payloads, and
+`AcpCoreRuntimeEvents.ts` maps them onto canonical runtime events. A provider contributes a
+`<Name>AcpSupport.ts` with spawn arguments, auth-method selection, and model/mode helpers.
+
+Two details differ per agent and are worth knowing before adding a third ACP provider:
+
+- **Modes.** ACP lets an agent expose permission modes either as a negotiated `mode` _configuration
+  option_ or as a `SessionModeState` driven by `session/set_mode` — never both. Cursor and Grok use
+  the config option, so they call `AcpSessionRuntime.setMode`. Hermes returns `configOptions: null`
+  and advertises `modes`, so it calls `setSessionMode`. Picking the wrong one validates against an
+  option that does not exist.
+- **Where the mode is applied.** Grok encodes T3's runtime mode as a `--permission-mode` spawn flag.
+  Hermes has no such flag: the mapping is applied after the session exists, and Hermes never echoes
+  it back with `current_mode_update`, so the adapter records the requested mode optimistically.
+
+Hermes also emits three notifications the shared runtime model does not parse — `usage_update`,
+`session_info_update`, and `available_commands_update`. [`HermesAdapter.ts`][hermes-adapter]
+registers a second raw `session/update` handler for them (handlers are appended, not replaced) and
+re-emits them as `thread.token-usage.updated` and `thread.metadata.updated`.
+
 ## Attachment access
 
 The server stores uploaded attachments in its attachment directory, outside the project workspace.
 `ProviderService` adds the absolute path of each attachment to the turn text, then passes every
 attachment to the provider adapter. Each adapter decides what its provider ingests natively:
 
-- Codex, Claude, Cursor, and Grok send images as native image inputs and skip generic files. For
-  these providers, generic files reach the agent only as file paths in the turn text.
+- Codex, Claude, Cursor, Grok, and Hermes send images as native image inputs and skip generic files.
+  For these providers, generic files reach the agent only as file paths in the turn text. Hermes
+  declares `promptCapabilities.image` and nothing else, and reads other files itself with its own
+  `read_file` tool.
 - OpenCode sends PNG/JPEG/GIF/WebP images, text files, and PDFs up to 20 MB as native file parts
   with their real mime type. Everything else (ZIP and other binaries, image formats model APIs
   reject, oversized files) falls back to the file path in the turn text, like the other providers.
@@ -110,7 +137,7 @@ attachment to the provider adapter. Each adapter decides what its provider inges
 Claude receives the attachment directory as an allowed additional directory. Codex keeps its
 configured sandbox policy, so access depends on that policy and the selected runtime mode. OpenCode
 allows all paths in full-access mode and requests approval for directories outside the workspace in
-restricted modes. Cursor and Grok use their own provider permission rules.
+restricted modes. Cursor, Grok, and Hermes use their own provider permission rules.
 
 The server does not copy attachments into a project or bypass provider approval rules. If an agent
 cannot read an attachment, the user must approve the access or select a runtime mode that permits it.
@@ -164,9 +191,13 @@ when a request opens (approval) or user input is requested, via
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
 [cursor]: ../../apps/server/src/provider/Drivers/CursorDriver.ts
 [grok]: ../../apps/server/src/provider/Drivers/GrokDriver.ts
+[hermes]: ../../apps/server/src/provider/Drivers/HermesDriver.ts
 [opencode]: ../../apps/server/src/provider/Drivers/OpenCodeDriver.ts
 [opencode-server-owner]: ../../apps/server/src/provider/OpenCodeServerOwner.ts
 [adapter]: ../../apps/server/src/provider/Services/ProviderAdapter.ts
+[acp]: https://agentclientprotocol.com/
+[acp-runtime]: ../../apps/server/src/provider/acp/AcpSessionRuntime.ts
+[hermes-adapter]: ../../apps/server/src/provider/Layers/HermesAdapter.ts
 [instances]: ../../apps/server/src/provider/Services/ProviderInstanceRegistry.ts
 [registry]: ../../apps/server/src/provider/Services/ProviderAdapterRegistry.ts
 [service]: ../../apps/server/src/provider/Layers/ProviderService.ts

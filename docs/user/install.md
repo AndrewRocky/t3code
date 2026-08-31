@@ -70,10 +70,19 @@ to use, then authenticate it.
 | Claude     | [Claude Code](https://claude.com/product/claude-code) | `claude`       | `claude auth login`   |
 | Cursor     | [Cursor CLI](https://cursor.com/cli)                  | `cursor-agent` | `agent login`         |
 | Grok Build | [Grok Build CLI](https://x.ai/cli)                    | `grok`         | `grok login`          |
+| Hermes     | [Hermes Agent](https://hermes-agent.nousresearch.com) | `hermes`       | `hermes model`        |
 | OpenCode   | [OpenCode](https://opencode.ai)                       | `opencode`     | `opencode auth login` |
 
-Codex and Claude are on by default. Cursor, Grok Build, and OpenCode are off by default; turn
-them on in **Settings** → the provider's card when you want to use them.
+Codex and Claude are on by default. Cursor, Grok Build, Hermes, and OpenCode are off by default;
+turn them on in **Settings** → the provider's card when you want to use them.
+
+Hermes needs two things beyond the install. Its editor integration ships as an optional Python
+extra, so install it with `pip install -e '.[acp]'` in the Hermes checkout (the official installer
+already does this) — T3 Code runs `hermes acp --check` and tells you if it is missing. And Hermes
+brings no models of its own: it federates OpenRouter, Nous Portal, OpenAI, Anthropic, local
+endpoints, and anything you declare under `providers:` in `~/.hermes/config.yaml`. Run
+`hermes model` once to pick a provider and sign in, and the model picker fills itself from whatever
+you configured. Model ids are `<provider>:<model>`, for example `openrouter:z-ai/glm-5.2`.
 
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.

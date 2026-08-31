@@ -26,8 +26,8 @@ unattended until it finishes or asks a question of its own.
 Approvals appear inline in the conversation. Approve or reject one and the agent continues from
 there.
 
-For Grok, **Always allow this session** remembers the matching command or tool input. Other
-actions still ask for approval. It does not change the thread to **Full access**.
+For Grok and Hermes, **Always allow this session** remembers the matching command or tool input.
+Other actions still ask for approval. It does not change the thread to **Full access**.
 
 ## Choosing a Mode
 
@@ -45,7 +45,15 @@ Each provider maps these modes onto its own approval and sandbox settings. Codex
 translates the mode into its approval policy and sandbox level, so **Supervised** runs the CLI
 with prompting enabled and a restricted workspace while **Full access** disables both. Grok
 threads do the same: **Supervised** starts Grok in ask mode even if your Grok CLI config is
-set to always-approve, and **Full access** starts Grok with always-approve. The labels above
-describe what you get; the exact per-provider translation is internal and may change.
+set to always-approve, and **Full access** starts Grok with always-approve.
+
+Hermes is worth calling out because its own modes cover file edits only. **Supervised** asks before
+every edit, **Auto-accept edits** auto-allows edits inside the workspace and the temp directory, and
+**Full access** auto-allows edits anywhere. In all three, Hermes still refuses to touch sensitive
+paths unasked — anything under `.git` or `.ssh`, and `.env*` / `id_rsa` / `id_ed25519` files — and
+shell commands always request approval from T3 Code, which only **Full access** answers for you.
+
+The labels above describe what you get; the exact per-provider translation is internal and may
+change.
 
 Mobile offers the same four modes with the same labels and descriptions.
