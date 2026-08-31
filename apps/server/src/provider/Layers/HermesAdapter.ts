@@ -103,6 +103,7 @@ import {
   makeHermesAcpRuntime,
   resolveHermesAcpBaseModelId,
 } from "../acp/HermesAcpSupport.ts";
+import { syncHermesCommandRules } from "../Drivers/HermesCommandRules.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1084,6 +1085,20 @@ export function makeHermesAdapter(
             provider: PROVIDER,
             threadId: input.threadId,
           });
+
+          // Best-effort: an unwritable or malformed config.yaml logs a
+          // warning and never blocks the session from starting. FileSystem
+          // and Path are provided explicitly from the services this adapter
+          // already resolved at construction time, rather than re-requiring
+          // them here.
+          yield* syncHermesCommandRules(
+            hermesSettings,
+            options?.environment ?? process.env,
+            cwd,
+          ).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeHermesAcpRuntime({

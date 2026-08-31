@@ -100,6 +100,16 @@ The shared runtime model parses only the turn-content notifications. An agent th
 Hermes emits `usage_update`, `session_info_update`, and `available_commands_update` — needs a second
 raw `session/update` handler in its adapter, because handlers append rather than replace.
 
+Command-level approval granularity has no ACP surface at all. Hermes' own
+`command_allowlist` and `approvals.deny` are checked before it ever sends
+`session/request_permission`, and nothing in `initialize` exposes them, so the only integration
+point is the `config.yaml` it reads (mtime-cached, so an edit mid-session applies without a
+restart). [`HermesCommandRules.ts`](../../apps/server/src/provider/Drivers/HermesCommandRules.ts)
+therefore merges settings into that file additively and never removes an entry: Hermes appends to
+the same key when a user answers "Allow always", and an administrator may hand-edit it, so a
+wholesale replace would erase trust T3 Code did not grant. Treat any provider config file T3 Code
+shares with its agent this way.
+
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)
 therefore rejects revert before touching files. Native permission and question option IDs must

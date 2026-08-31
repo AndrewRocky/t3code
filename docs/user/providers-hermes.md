@@ -51,6 +51,30 @@ sensitive paths unasked — anything under `.git` or `.ssh`, and `.env*`, `id_rs
 or `id_ed25519` files. **Full access** does not carve out that exception: it
 auto-answers every prompt T3 Code receives, sensitive-path edits included.
 
+### Limiting Hermes to specific commands
+
+Hermes' modes have no notion of "auto-approve this command but not that one" — it is edits-vs-not,
+full stop. Hermes does have finer-grained command control, but it lives entirely on Hermes' side of
+the connection, in its own `config.yaml`: a `command_allowlist` of glob patterns that run without
+ever generating a prompt, and an `approvals.deny` list of patterns that are refused no matter what
+T3 Code's permission mode is set to — including **Full access**.
+
+The Hermes provider's settings expose both lists as **Command rules** on the provider instance's
+configuration tab: **Always allow** patterns and **Always block** patterns, each written into
+Hermes' `config.yaml` the next time a session starts. This is the practical middle ground for
+running Hermes against a smaller local model — one you trust less to make its own judgment calls
+but don't want interrupting you for every routine command. Allowlist what you already trust
+(`git status*`, `cargo test*`, a build script) so it runs without a prompt in any mode, denylist
+what should never run (`sudo *`, `rm -rf *`), and leave everything else asking as normal.
+
+Two things are worth knowing about how the lists behave. T3 Code only ever adds patterns, never
+removes one: Hermes itself appends to `command_allowlist` whenever you answer "Allow always" to a
+live prompt, and you can hand-edit either list directly, so a sync that deleted entries T3 Code did
+not add could silently undo trust another actor granted. Removing a pattern for good means editing
+`config.yaml`, not just clearing the field in Settings. And an allowlist match only ever applies to
+a plain command — one with no `&&`, `;`, pipes, or `$(...)` — so a compound command cannot sneak an
+unapproved step in behind an allowlisted prefix.
+
 ## Skills
 
 Hermes reads skills from `<HERMES_HOME>/skills`, and from `.agents/skills` or
