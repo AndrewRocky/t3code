@@ -88,6 +88,18 @@ An async question can outlive the turn or a server restart. The engine reads tha
 durable activity before resolving it because the in-memory command snapshot omits old activities.
 Do not infer that a request has disappeared merely because it is outside the recent window.
 
+ACP exposes permission modes two ways and an agent picks exactly one: a negotiated `mode`
+_configuration option_, or a `SessionModeState` driven by `session/set_mode`. Cursor and Grok use
+the config option; Hermes returns `configOptions: null` and advertises `modes`. Writing the config
+option to an agent that does not negotiate one validates against an option that does not exist.
+Grok also encodes the runtime mode as a spawn flag, while Hermes can only be told after the session
+exists and never echoes the result back, so that mode is recorded optimistically and re-applied on
+every session start. See [`AcpSessionRuntime.ts`](../../apps/server/src/provider/acp/AcpSessionRuntime.ts).
+
+The shared runtime model parses only the turn-content notifications. An agent that sends more —
+Hermes emits `usage_update`, `session_info_update`, and `available_commands_update` — needs a second
+raw `session/update` handler in its adapter, because handlers append rather than replace.
+
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)
 therefore rejects revert before touching files. Native permission and question option IDs must
