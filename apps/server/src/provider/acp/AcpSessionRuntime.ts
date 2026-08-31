@@ -229,6 +229,19 @@ export class AcpSessionRuntime extends Context.Service<
      */
     readonly setModel: (model: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
     /**
+     * Selects the active mode through the standard ACP `session/set_mode` request.
+     *
+     * Distinct from {@link setMode}, which drives a negotiated `mode`
+     * *configuration option*. An agent advertises modes one way or the other —
+     * Cursor and Grok use the config option, agents that return
+     * `SessionModeState` alongside a null `configOptions` (Hermes) need this
+     * route — so the caller picks the one its agent implements.
+     * @see https://agentclientprotocol.com/protocol/schema#session/set_mode
+     */
+    readonly setSessionMode: (
+      modeId: string,
+    ) => Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError>;
+    /**
      * Selects the active model through the unstable ACP `session/set_model` capability.
      * @see https://agentclientprotocol.com/protocol/schema#session/set_model
      */
@@ -797,6 +810,20 @@ export const make = (
         getStartedState.pipe(
           Effect.flatMap((started) => setConfigOption(started.modelConfigId ?? "model", model)),
           Effect.asVoid,
+        ),
+      setSessionMode: (modeId) =>
+        getStartedState.pipe(
+          Effect.flatMap((started) => {
+            const requestPayload = {
+              sessionId: started.sessionId,
+              modeId,
+            } satisfies EffectAcpSchema.SetSessionModeRequest;
+            return runLoggedRequest(
+              "session/set_mode",
+              requestPayload,
+              acp.agent.setSessionMode(requestPayload),
+            ).pipe(Effect.tap(() => updateCurrentModeId(modeId)));
+          }),
         ),
       setSessionModel: (modelId, meta) =>
         getStartedState.pipe(
