@@ -56,13 +56,24 @@ const permissionOptionIds = {
   rejectOnce: process.env.T3_ACP_REJECT_ONCE_OPTION_ID ?? "reject-once",
 };
 const omitAllowAlways = process.env.T3_ACP_OMIT_ALLOW_ALWAYS === "1";
+// Hermes-shaped agent: three edit-approval session modes, `<provider>:<model>`
+// model ids, and `configOptions` omitted entirely — Hermes advertises modes
+// *instead of* config options, so a mock that offered both would not exercise
+// the `session/set_mode` path the Hermes adapter depends on.
+const hermesMode = process.env.T3_ACP_HERMES === "1";
+// Hermes' five permission options. Two of them share the ACP kind
+// `allow_always`, which is exactly the ambiguity the adapter resolves by id.
+const hermesPermissionOptions = process.env.T3_ACP_HERMES_PERMISSION_OPTIONS === "1";
+// The three notifications the shared ACP runtime model does not parse.
+const emitHermesMetadata = process.env.T3_ACP_EMIT_HERMES_METADATA === "1";
+const modeLogPath = process.env.T3_ACP_MODE_LOG_PATH;
 const permissionRequestCount = Math.max(
   1,
   Number(process.env.T3_ACP_PERMISSION_REQUEST_COUNT ?? "1") || 1,
 );
 const sessionId = "mock-session-1";
 
-let currentModeId = "ask";
+let currentModeId = hermesMode ? "default" : "ask";
 let currentModelId = "default";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";
@@ -109,6 +120,11 @@ process.once("exit", (code) => {
 });
 
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
+  // Hermes advertises modes instead of config options and answers
+  // `session/new` with `configOptions: null` — see the note on `hermesMode`.
+  if (hermesMode) {
+    return [];
+  }
   if (parameterizedModelPicker) {
     const baseOptions: Array<AcpSchema.SessionConfigOption> = [
       {
@@ -268,7 +284,7 @@ function availableModels(): ReadonlyArray<{
   }));
 }
 
-const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
+const defaultAvailableModes: ReadonlyArray<AcpSchema.SessionMode> = [
   {
     id: "ask",
     name: "Ask",
@@ -286,12 +302,37 @@ const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
   },
 ];
 
+/** Mirrors `acp_adapter/server.py _session_modes`. */
+const hermesAvailableModes: ReadonlyArray<AcpSchema.SessionMode> = [
+  { id: "default", name: "Default", description: "Ask before edits." },
+  {
+    id: "accept_edits",
+    name: "Accept Edits",
+    description: "Auto-allow workspace and /tmp edits; still asks for sensitive paths.",
+  },
+  {
+    id: "dont_ask",
+    name: "Don't Ask",
+    description: "Auto-allow file edits for this session except sensitive paths.",
+  },
+];
+
+const availableModes: ReadonlyArray<AcpSchema.SessionMode> = hermesMode
+  ? hermesAvailableModes
+  : defaultAvailableModes;
+
 function modeState(): AcpSchema.SessionModeState {
   return {
     currentModeId,
     availableModes,
   };
 }
+
+/** `<provider>:<model>` ids, as produced by `server.py _encode_model_choice`. */
+const hermesAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
+  { modelId: "openrouter:z-ai/glm-5.2", name: "OpenRouter · z-ai/glm-5.2" },
+  { modelId: "nous:hermes-4-405b", name: "Nous Portal · hermes-4-405b" },
+];
 
 const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
   {
@@ -304,13 +345,16 @@ const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
   { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
 ];
 
+const acpModels = hermesMode ? hermesAcpModels : grokAcpModels;
+
 function modelState(): AcpSchema.SessionModelState {
-  const modelId = grokAcpModels.some((model) => model.modelId === currentModelId)
+  const fallbackModelId = hermesMode ? "openrouter:z-ai/glm-5.2" : "grok-build";
+  const modelId = acpModels.some((model) => model.modelId === currentModelId)
     ? currentModelId
-    : "grok-build";
+    : fallbackModelId;
   return {
     currentModelId: modelId,
-    availableModels: grokAcpModels,
+    availableModels: acpModels,
   };
 }
 
@@ -401,9 +445,25 @@ const program = Effect.gen(function* () {
     }),
   );
 
+  yield* agent.handleSetSessionMode((request) =>
+    Effect.gen(function* () {
+      if (!availableModes.some((mode) => mode.id === request.modeId)) {
+        return yield* AcpError.AcpRequestError.invalidParams(
+          `Unknown mock mode id: ${request.modeId}`,
+          { method: "session/set_mode", params: request },
+        );
+      }
+      currentModeId = request.modeId;
+      if (modeLogPath) {
+        NodeFS.appendFileSync(modeLogPath, `${request.modeId}\n`, "utf8");
+      }
+      return {};
+    }),
+  );
+
   yield* agent.handleSetSessionModel((request) =>
     Effect.gen(function* () {
-      if (!grokAcpModels.some((model) => model.modelId === request.modelId)) {
+      if (!acpModels.some((model) => model.modelId === request.modelId)) {
         return yield* AcpError.AcpRequestError.invalidParams(
           `Unknown mock model id: ${request.modelId}`,
           {
@@ -477,6 +537,47 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
+
+      if (emitHermesMetadata) {
+        // The three notifications `AcpRuntimeModel` does not parse. Emitted
+        // before any turn content so a test can assert the adapter re-emits
+        // them without depending on turn ordering.
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: { sessionUpdate: "usage_update", size: 272000, used: 4096 },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "session_info_update",
+            title: "Mock Hermes session",
+            updatedAt: "2026-01-01T00:00:00Z",
+            _meta: {
+              hermes: {
+                sessionProvenance: {
+                  acpSessionId: requestedSessionId,
+                  currentHermesSessionId: "hermes-session-2",
+                  rootHermesSessionId: "hermes-session-1",
+                  previousHermesSessionId: "hermes-session-1",
+                  sessionKind: "continuation",
+                  compressionDepth: 1,
+                  reason: "compression",
+                },
+              },
+            },
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "model", description: "Show current model and provider, or switch models" },
+              { name: "compress", description: "Compress conversation context" },
+            ],
+          },
+        });
+      }
 
       if (Number.isFinite(promptDelayMs) && promptDelayMs > 0) {
         yield* Effect.sleep(`${promptDelayMs} millis`);
@@ -739,19 +840,29 @@ const program = Effect.gen(function* () {
           },
         });
 
-        const permissionOptions: Array<AcpSchema.PermissionOption> = [
-          { optionId: permissionOptionIds.allowOnce, name: "Allow once", kind: "allow_once" },
-          ...(omitAllowAlways
-            ? []
-            : [
-                {
-                  optionId: permissionOptionIds.allowAlways,
-                  name: "Allow always",
-                  kind: "allow_always" as const,
-                },
-              ]),
-          { optionId: permissionOptionIds.rejectOnce, name: "Reject", kind: "reject_once" },
-        ];
+        const permissionOptions: Array<AcpSchema.PermissionOption> = hermesPermissionOptions
+          ? [
+              { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+              // Session and persistent both carry kind `allow_always`: ACP has
+              // no session-scoped allow kind, so only the id tells them apart.
+              { optionId: "allow_session", name: "Allow for session", kind: "allow_always" },
+              { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+              { optionId: "deny_always", name: "Deny always", kind: "reject_always" },
+            ]
+          : [
+              { optionId: permissionOptionIds.allowOnce, name: "Allow once", kind: "allow_once" },
+              ...(omitAllowAlways
+                ? []
+                : [
+                    {
+                      optionId: permissionOptionIds.allowAlways,
+                      name: "Allow always",
+                      kind: "allow_always" as const,
+                    },
+                  ]),
+              { optionId: permissionOptionIds.rejectOnce, name: "Reject", kind: "reject_once" },
+            ];
 
         let cancelled = cancelledSessions.delete(requestedSessionId);
         for (let index = 0; index < permissionRequestCount; index++) {
