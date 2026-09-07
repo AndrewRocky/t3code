@@ -114,9 +114,14 @@ export interface HermesCommandRulesSectionProps {
  * `session/request_permission` prompt — see `docs/user/permission-modes.md`
  * for the full semantics. The two lists behave differently on purpose: an
  * allow match skips the prompt entirely, in any permission mode; a deny
- * match blocks the command unconditionally, even in Full access. T3 only
- * ever adds patterns here — removing one from this list does not delete a
- * pattern Hermes or an administrator added on their own, on the Hermes side.
+ * match blocks the command unconditionally, even in Full access.
+ *
+ * Adding a pattern here writes it into that file on the next session start,
+ * and removing one takes it back out again — T3 tracks which entries it
+ * wrote, so a revocation here is a real revocation. Patterns Hermes added
+ * itself (from an "Allow always" answer) or an administrator hand-edited in
+ * are not shown here and are never removed by a sync; clearing one of those
+ * still means editing `config.yaml`.
  */
 export function HermesCommandRulesSection({
   instanceId,
@@ -132,7 +137,8 @@ export function HermesCommandRulesSection({
         <p className="mt-1 text-xs text-muted-foreground">
           Glob patterns Hermes checks itself, before a shell command ever reaches T3 Code for
           approval. Useful when running smaller local models: let routine commands through without a
-          prompt, and hard-block the ones that should never run.
+          prompt, and hard-block the ones that should never run. Adding or removing a pattern here
+          updates Hermes&apos; own config the next time a session starts.
         </p>
       </div>
       <CommandPatternList

@@ -125,13 +125,20 @@ no config option for it, so the only way to reach Hermes' own `command_allowlist
 `approvals.deny` (`tools/approval.py check_dangerous_command`, checked before Hermes ever calls
 `session/request_permission`) is the `config.yaml` file it reads at startup, mtime-cached so an edit
 mid-session takes effect without a restart. [`HermesCommandRules.ts`][hermes-command-rules]
-additively merges `HermesSettings.commandAllowlist`/`commandDenylist` into that file's
-`command_allowlist` root key and `approvals.deny`, right before `startSession` spawns the process.
-"Additively" is load-bearing: Hermes itself appends to `command_allowlist` when a user answers
-"Allow always" to a live prompt, and an administrator may hand-edit either list directly, so a sync
-that replaced either wholesale could erase trust neither T3 nor its own settings granted. The merge
-only ever adds a pattern present in settings but absent from the file — removing a pattern from
-settings does not delete it from `config.yaml`.
+merges `HermesSettings.commandAllowlist`/`commandDenylist` into that file's `command_allowlist`
+root key and `approvals.deny`, right before `startSession` spawns the process.
+
+T3 is not the only writer of either key: Hermes itself appends to `command_allowlist` when a user
+answers "Allow always" to a live prompt, and an administrator may hand-edit either list directly, so
+a sync that replaced either wholesale could erase trust neither T3 nor its own settings granted.
+The merge is therefore scoped by provenance rather than being either additive-only or destructive.
+T3 records the exact set of patterns it last wrote for a given Hermes home in
+`<HERMES_HOME>/.t3code-command-rules.json`, and each sync adds patterns present in settings but
+absent from the file, removes patterns in that record that settings no longer list, and leaves
+everything else — a Hermes-appended entry, a hand-edited one — untouched. That is what makes the
+Remove button in the settings UI honest without putting foreign entries at risk. A missing or
+unreadable record degrades the sync to additive-only, so an entry of unknown authorship is never
+removed on a guess; clearing one of those still means editing `config.yaml`.
 
 ## Attachment access
 

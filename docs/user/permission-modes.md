@@ -72,13 +72,17 @@ but don't want interrupting you for every routine command: allowlist the command
 (`git status*`, `cargo test*`, a build script) so they run without a prompt in any mode, denylist
 the ones that should never run (`sudo *`, `rm -rf *`), and leave everything else asking as normal.
 
-Two things worth knowing about how the lists behave: T3 Code only ever adds patterns to these lists,
-it never removes one. Hermes itself appends to `command_allowlist` whenever you answer "Allow
-always" to a live prompt, and you can hand-edit either list directly in `config.yaml` — a sync that
-deleted entries T3 didn't add could silently undo trust another actor granted, so removing a pattern
-for good means editing `config.yaml` (or clearing the field) rather than removing it from Settings.
-And an allowlist match only ever applies to a plain command — one with no `&&`, `;`, pipes, or
-`$(...)` — so a compound command can't sneak an unapproved step in behind an allowlisted prefix.
+Two things worth knowing about how the lists behave. First, T3 Code manages only the entries it
+wrote. Adding a pattern in Settings writes it into `config.yaml` at the next session start, and
+removing it there takes it back out again at the next session start — a revocation in Settings is a
+real revocation. But T3 Code is not the only writer of these lists: Hermes appends to
+`command_allowlist` whenever you answer "Allow always" to a live prompt, and you can hand-edit
+either list directly. Entries from either of those sources don't appear in Settings and a sync never
+removes them, so clearing one of those means editing `config.yaml` yourself. (T3 Code keeps its
+record of what it wrote in a `.t3code-command-rules.json` file beside `config.yaml`; delete that and
+it falls back to only ever adding.) Second, an allowlist match only ever applies to a plain command —
+one with no `&&`, `;`, pipes, or `$(...)` — so a compound command can't sneak an unapproved step in
+behind an allowlisted prefix.
 
 The labels above describe what you get; the exact per-provider translation is internal and may
 change.
