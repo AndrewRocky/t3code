@@ -105,10 +105,13 @@ Command-level approval granularity has no ACP surface at all. Hermes' own
 `session/request_permission`, and nothing in `initialize` exposes them, so the only integration
 point is the `config.yaml` it reads (mtime-cached, so an edit mid-session applies without a
 restart). [`HermesCommandRules.ts`](../../apps/server/src/provider/Drivers/HermesCommandRules.ts)
-therefore merges settings into that file additively and never removes an entry: Hermes appends to
-the same key when a user answers "Allow always", and an administrator may hand-edit it, so a
-wholesale replace would erase trust T3 Code did not grant. Treat any provider config file T3 Code
-shares with its agent this way.
+therefore scopes its merge by provenance rather than replacing either key. T3 Code is not the only
+writer — Hermes appends to `command_allowlist` when a user answers "Allow always", and an
+administrator may hand-edit either list — so the sync records the exact patterns it last wrote in
+`<HERMES_HOME>/.t3code-command-rules.json`, then adds what settings list, removes what that record
+claims and settings no longer list, and leaves every other entry alone. A missing or unreadable
+record degrades to additive-only, so an entry of unknown authorship is never removed on a guess.
+Treat any provider config file T3 Code shares with its agent this way.
 
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)

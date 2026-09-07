@@ -37,11 +37,11 @@ Hermes is worth calling out because its own modes cover **file edits only**. See
 [permission modes](./permission-modes.md) for what the four T3 Code modes mean in
 general; against Hermes they land like this:
 
-| T3 Code mode          | Hermes edit policy                                        |
-| --------------------- | --------------------------------------------------------- |
-| Supervised            | Asks before every edit.                                   |
-| Auto-accept edits     | Auto-allows edits in the workspace and the temp directory. |
-| Full access           | Auto-allows edits anywhere.                               |
+| T3 Code mode      | Hermes edit policy                                         |
+| ----------------- | ---------------------------------------------------------- |
+| Supervised        | Asks before every edit.                                    |
+| Auto-accept edits | Auto-allows edits in the workspace and the temp directory. |
+| Full access       | Auto-allows edits anywhere.                                |
 
 Shell commands are not covered by any of that. Hermes always asks T3 Code before
 running one, and **Full access** is the only mode that answers for you.
@@ -67,12 +67,16 @@ but don't want interrupting you for every routine command. Allowlist what you al
 (`git status*`, `cargo test*`, a build script) so it runs without a prompt in any mode, denylist
 what should never run (`sudo *`, `rm -rf *`), and leave everything else asking as normal.
 
-Two things are worth knowing about how the lists behave. T3 Code only ever adds patterns, never
-removes one: Hermes itself appends to `command_allowlist` whenever you answer "Allow always" to a
-live prompt, and you can hand-edit either list directly, so a sync that deleted entries T3 Code did
-not add could silently undo trust another actor granted. Removing a pattern for good means editing
-`config.yaml`, not just clearing the field in Settings. And an allowlist match only ever applies to
-a plain command — one with no `&&`, `;`, pipes, or `$(...)` — so a compound command cannot sneak an
+Two things are worth knowing about how the lists behave. First, T3 Code manages only the entries it
+wrote. Adding a pattern in Settings writes it into `config.yaml` at the next session start, and
+removing it there takes it back out again at the next session start — a revocation in Settings is a
+real revocation. But T3 Code is not the only writer of these lists: Hermes appends to
+`command_allowlist` whenever you answer "Allow always" to a live prompt, and you can hand-edit
+either list directly. Entries from either of those sources do not appear in Settings and a sync
+never removes them, so clearing one of those means editing `config.yaml` yourself. (T3 Code keeps
+its record of what it wrote in a `.t3code-command-rules.json` file beside `config.yaml`; delete that
+and it falls back to only ever adding.) Second, an allowlist match only ever applies to a plain
+command — one with no `&&`, `;`, pipes, or `$(...)` — so a compound command cannot sneak an
 unapproved step in behind an allowlisted prefix.
 
 ## Skills
