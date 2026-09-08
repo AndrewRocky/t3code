@@ -80,6 +80,14 @@ export interface AcpPermissionRequest {
   readonly toolCall?: AcpToolCallState;
 }
 
+/**
+ * Which text stream an ACP chunk belongs to. `agent_message_chunk` is the
+ * assistant's answer; `agent_thought_chunk` is provider reasoning, which stays
+ * a separate stream all the way to the runtime event so it is never folded
+ * into the assistant message.
+ */
+export type AcpContentStreamKind = "assistant_text" | "reasoning_text";
+
 export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ModeChanged";
@@ -106,6 +114,7 @@ export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
+      readonly streamKind: AcpContentStreamKind;
       readonly text: string;
       readonly rawPayload: unknown;
     };
@@ -813,10 +822,16 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       }
       break;
     }
-    case "agent_message_chunk": {
+    // Both text channels parse the same way and stay apart by stream kind.
+    // Agents that keep local status chatter off the thought channel, Hermes
+    // among them, put nothing but model reasoning on it.
+    case "agent_message_chunk":
+    case "agent_thought_chunk": {
       if (upd.content.type === "text" && upd.content.text.length > 0) {
         events.push({
           _tag: "ContentDelta",
+          streamKind:
+            upd.sessionUpdate === "agent_thought_chunk" ? "reasoning_text" : "assistant_text",
           text: upd.content.text,
           rawPayload: params,
         });

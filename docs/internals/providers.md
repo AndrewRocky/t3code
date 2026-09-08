@@ -115,6 +115,14 @@ Two details differ per agent and are worth knowing before adding a third ACP pro
   Hermes has no such flag: the mapping is applied after the session exists, and Hermes never echoes
   it back with `current_mode_update`, so the adapter records the requested mode optimistically.
 
+**Reasoning has its own ACP channel.** Agents send it as `agent_thought_chunk`, separate from the
+`agent_message_chunk` that carries the answer. `AcpRuntimeModel.ts` parses both into content deltas
+and tags them `reasoning_text` or `assistant_text`, so reasoning is never folded into the assistant
+message. Hermes routes every reasoning delta there and keeps its own local status messages off that
+channel, so for Hermes it is model reasoning and nothing else. `user_message_chunk` stays unparsed:
+the only source of it is `session/load` replay, which the load gate drops because T3 already owns
+the persisted transcript.
+
 Hermes also emits three notifications the shared runtime model does not parse — `usage_update`,
 `session_info_update`, and `available_commands_update`. [`HermesAdapter.ts`][hermes-adapter]
 registers a second raw `session/update` handler for them (handlers are appended, not replaced) and

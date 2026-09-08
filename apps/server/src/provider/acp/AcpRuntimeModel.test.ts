@@ -324,6 +324,7 @@ describe("AcpRuntimeModel", () => {
     expect(contentResult.events).toEqual([
       {
         _tag: "ContentDelta",
+        streamKind: "assistant_text",
         text: "hello from acp",
         rawPayload: {
           sessionId: "session-1",
@@ -337,6 +338,42 @@ describe("AcpRuntimeModel", () => {
         },
       },
     ]);
+  });
+
+  it("parses agent thought chunks as a reasoning stream", () => {
+    const thoughtNotification = {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "text",
+          text: "weighing the options",
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification;
+
+    expect(parseSessionUpdateEvent(thoughtNotification).events).toEqual([
+      {
+        _tag: "ContentDelta",
+        streamKind: "reasoning_text",
+        text: "weighing the options",
+        rawPayload: thoughtNotification,
+      },
+    ]);
+
+    const imageThought = {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "image",
+          data: "AAAA",
+          mimeType: "image/png",
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification;
+
+    expect(parseSessionUpdateEvent(imageThought).events).toEqual([]);
   });
 
   it("keeps permission request parsing compatible with loose extension payloads", () => {
