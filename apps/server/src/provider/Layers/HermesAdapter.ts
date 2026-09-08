@@ -119,12 +119,15 @@ const PROVIDER = ProviderDriverKind.make("hermes");
 const HERMES_RESUME_VERSION = 1 as const;
 const NANOS_PER_MILLI = 1_000_000n;
 /**
- * Hermes' own reasoning phase is invisible over ACP, and `session/update`
- * delivery blocks its worker for up to five seconds per event, so a healthy
- * turn can be quiet for a while. Ten minutes without any ACP progress is long
- * enough that the turn is wedged rather than thinking.
+ * Hermes streams its reasoning as `agent_thought_chunk`, which the shared ACP
+ * model parses into reasoning content deltas, so a thinking turn now reports
+ * progress instead of looking idle. What is still legitimately quiet is
+ * delivery: `session/update` blocks Hermes' worker for up to five seconds per
+ * event, and the model can sit on the executor queue before its first token.
+ * Five minutes without any ACP progress is long enough that the turn is wedged
+ * rather than working.
  */
-const DEFAULT_HERMES_TURN_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1_000;
+const DEFAULT_HERMES_TURN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1_000;
 /**
  * A Hermes tool can legitimately run far longer than that — `terminal`,
  * `delegate_task`, and `execute_code` all wrap open-ended work — so an active
