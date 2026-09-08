@@ -88,6 +88,13 @@ An async question can outlive the turn or a server restart. The engine reads tha
 durable activity before resolving it because the in-memory command snapshot omits old activities.
 Do not infer that a request has disappeared merely because it is outside the recent window.
 
+Reasoning has its own ACP channel: `agent_thought_chunk`, separate from the `agent_message_chunk`
+that carries the answer. The shared model parses it as a distinct `ThoughtDelta`, and each adapter
+decides whether its agent's thought channel is model reasoning worth showing. Antigravity and Hermes
+re-emit it as a `reasoning_text` content delta; Cursor and Grok drop it, because their thought
+channel also carries local status chatter. Do not resolve this in the shared parser — the same
+notification means different things per agent.
+
 ACP exposes permission modes two ways and an agent picks exactly one: a negotiated `mode`
 _configuration option_, or a `SessionModeState` driven by `session/set_mode`. Cursor and Grok use
 the config option; Hermes returns `configOptions: null` and advertises `modes`. Writing the config

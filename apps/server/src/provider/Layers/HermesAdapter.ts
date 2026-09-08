@@ -1400,6 +1400,12 @@ export function makeHermesAdapter(
                       }),
                     );
                     return;
+                  // Hermes keeps local status chatter off `agent_thought_chunk`,
+                  // so everything arriving as a ThoughtDelta is model reasoning
+                  // and belongs on its own stream rather than folded into the
+                  // assistant message. Mirrors the Antigravity adapter; Cursor
+                  // and Grok still drop reasoning, which is their own call.
+                  case "ThoughtDelta":
                   case "ContentDelta":
                     yield* offerRuntimeEvent(
                       makeAcpContentDeltaEvent({
@@ -1407,7 +1413,12 @@ export function makeHermesAdapter(
                         provider: PROVIDER,
                         threadId: ctx.threadId,
                         turnId: notificationTurnId,
-                        ...(event.itemId ? { itemId: event.itemId } : {}),
+                        ...(event._tag === "ContentDelta" && event.itemId
+                          ? { itemId: event.itemId }
+                          : {}),
+                        ...(event._tag === "ThoughtDelta"
+                          ? { streamKind: "reasoning_text" as const }
+                          : {}),
                         text: event.text,
                         rawPayload: event.rawPayload,
                       }),
