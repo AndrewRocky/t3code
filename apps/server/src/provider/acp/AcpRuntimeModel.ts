@@ -66,6 +66,62 @@ export interface AcpToolCallState {
   readonly data: Record<string, unknown>;
 }
 
+/**
+ * What one ACP agent sent for a single tool call, before T3 Code derives any
+ * presentation from it.
+ *
+ * The shared path builds a work-log row out of `rawInput` plus a small set of
+ * conventional keys, which is enough for an agent that populates them. An agent
+ * that carries the same facts somewhere else — in its title, or in a content
+ * block written for a Markdown host — loses them, because
+ * `deriveToolActivityPresentation` has already replaced the title with a generic
+ * label by the time anything downstream could look. An adapter that knows its
+ * own agent's conventions hands those carriers back through an
+ * {@link AcpToolCallAugmenter}, so the shared extractors see the same shape they
+ * would have seen from an agent that filled `rawInput` in.
+ */
+export interface AcpToolCallAugmentInput {
+  readonly toolCallId: string;
+  readonly kind: string | undefined;
+  readonly status: "pending" | "inProgress" | "completed" | "failed" | undefined;
+  /** The agent's own title, before the generic label replaces it. */
+  readonly title: string | undefined;
+  readonly rawInput: unknown;
+  readonly rawOutput: unknown;
+  readonly locations: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | undefined;
+  /** Flattened, already-bounded text of the tool call's content blocks. */
+  readonly text: string | undefined;
+  /** Whatever the shared command extractor found, if anything. */
+  readonly command: string | undefined;
+}
+
+export interface AcpToolCallAugment {
+  /** Command text recovered from an agent-specific carrier. */
+  readonly command?: string;
+  /**
+   * Changed-file paths. Only for kinds that really change files: the work-log
+   * groups any entry carrying changed files as an edit, ahead of every other
+   * classification, so listing a read's paths here would label it a write.
+   */
+  readonly files?: ReadonlyArray<{ readonly path: string }>;
+  /** Detail to use when the generic presentation produced none. */
+  readonly detail?: string;
+  /**
+   * Extra `data` entries. Merged underneath the fields this module owns, so an
+   * augmenter can add to the payload but never rewrite `toolCallId`, `kind`,
+   * `command`, `rawInput`, `rawOutput`, `content` or `locations`.
+   */
+  readonly data?: Record<string, unknown>;
+}
+
+/**
+ * Opt-in per adapter. An ACP session runtime with no augmenter behaves exactly
+ * as it did before this hook existed.
+ */
+export type AcpToolCallAugmenter = (
+  input: AcpToolCallAugmentInput,
+) => AcpToolCallAugment | undefined;
+
 export interface AcpPlanUpdate {
   readonly explanation?: string | null;
   readonly plan: ReadonlyArray<{
@@ -468,6 +524,7 @@ function makeToolCallState(
   },
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
+    readonly augment?: AcpToolCallAugmenter;
   },
 ): AcpToolCallState | undefined {
   const toolCallId = input.toolCallId.trim();
@@ -475,15 +532,31 @@ function makeToolCallState(
     return undefined;
   }
   const title = input.title?.trim() || undefined;
-  const command = extractToolCallCommand(input.rawInput, title);
   const extractedContent = extractTextContentFromToolCallContent(input.content);
   const textContent = extractedContent.text;
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
       : undefined;
-  const data: Record<string, unknown> = { toolCallId };
   const kind = normalizeToolKind(input.kind);
+  const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
+  const extractedCommand = extractToolCallCommand(input.rawInput, title);
+  // Runs before presentation, because presentation is where the agent's own
+  // title stops being observable.
+  const augment = options?.augment?.({
+    toolCallId,
+    kind,
+    status,
+    title,
+    rawInput: input.rawInput,
+    rawOutput: input.rawOutput,
+    locations: input.locations ?? undefined,
+    text: textContent,
+    command: extractedCommand,
+  });
+  const command = extractedCommand ?? normalizeCommandValue(augment?.command);
+  // Augmenter entries sit underneath, so the keys below always win.
+  const data: Record<string, unknown> = { ...augment?.data, toolCallId };
   if (kind) {
     data.kind = kind;
   }
@@ -492,6 +565,9 @@ function makeToolCallState(
   }
   if (input.rawInput !== undefined) {
     data.rawInput = input.rawInput;
+  }
+  if (augment?.files !== undefined && augment.files.length > 0) {
+    data.files = augment.files;
   }
   if (input.rawOutput !== undefined) {
     data.rawOutput = boundToolCallRawOutput(input.rawOutput);
@@ -518,14 +594,16 @@ function makeToolCallState(
         fallbackSummary: title ?? "Tool",
       })
     : undefined;
-  const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
+  // A generic summary with no detail is the shape that renders as an
+  // unexpandable one-word row, so an augmenter gets the last word there.
+  const detail = presentation?.detail ?? (augment?.detail?.trim() || undefined);
   return {
     toolCallId,
     ...(kind ? { kind } : {}),
     ...(presentation?.summary ? { title: presentation.summary } : {}),
     ...(status ? { status } : {}),
     ...(command ? { command } : {}),
-    ...(presentation?.detail ? { detail: presentation.detail } : {}),
+    ...(detail ? { detail } : {}),
     data,
   };
 }
@@ -534,6 +612,7 @@ function parseTypedToolCallState(
   event: AcpToolCallUpdate,
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
+    readonly augment?: AcpToolCallAugmenter;
   },
 ): AcpToolCallState | undefined {
   return makeToolCallState(
@@ -763,7 +842,12 @@ function boundToolCallRawPayload(
   };
 }
 
-export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotification): {
+export function parseSessionUpdateEvent(
+  params: EffectAcpSchema.SessionNotification,
+  options?: {
+    readonly toolCallAugment?: AcpToolCallAugmenter;
+  },
+): {
   readonly modeId?: string;
   readonly events: ReadonlyArray<AcpParsedSessionEvent>;
 } {
@@ -801,6 +885,7 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
     case "tool_call": {
       const toolCall = parseTypedToolCallState(upd, {
         fallbackStatus: "pending",
+        ...(options?.toolCallAugment ? { augment: options.toolCallAugment } : {}),
       });
       if (toolCall) {
         events.push({
@@ -812,7 +897,10 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       break;
     }
     case "tool_call_update": {
-      const toolCall = parseTypedToolCallState(upd);
+      const toolCall = parseTypedToolCallState(
+        upd,
+        options?.toolCallAugment ? { augment: options.toolCallAugment } : undefined,
+      );
       if (toolCall) {
         events.push({
           _tag: "ToolCallUpdated",
