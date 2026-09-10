@@ -44,6 +44,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { buildHermesEnvironment } from "../Drivers/HermesHome.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import { hermesToolCallAugment } from "./HermesToolCallAugment.ts";
 
 const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
 
@@ -139,6 +140,11 @@ export const makeHermesAcpRuntime = (
         ...input,
         spawn: buildHermesAcpSpawnInput(input.hermesSettings, input.cwd, input.environment),
         authMethodId: HERMES_AUTH_METHOD_SETUP,
+        // Hermes sends `raw_input: null` for every native tool and keeps the
+        // command, the query and the target path in its title and start
+        // content block instead. Without this the shared path has nothing to
+        // build a work-log row from. See HermesToolCallAugment.
+        toolCallAugment: hermesToolCallAugment,
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
