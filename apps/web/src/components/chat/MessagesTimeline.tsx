@@ -2210,8 +2210,12 @@ function buildToolCallExpandedBody(
   } else if (workEntry.command?.trim()) {
     blocks.push(workEntry.command.trim());
   }
-  if (workEntry.detail?.trim()) {
-    blocks.push(workEntry.detail.trim());
+  // `outputText` is the full result block when the provider's payload retained
+  // one; `detail` is the one-line preview cut from the same text, so showing
+  // both would repeat the first line.
+  const body = workEntry.outputText?.trim() || workEntry.detail?.trim();
+  if (body) {
+    blocks.push(body);
   }
   const changedFiles = workEntry.changedFiles ?? [];
   if (changedFiles.length > 0) {

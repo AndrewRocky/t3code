@@ -97,6 +97,70 @@ describe("projectActivityPayload", () => {
     expect(JSON.stringify(acp.payload).length).toBeLessThan(500);
   });
 
+  it("keeps the full result block only when a payload asks for it", () => {
+    const block = [
+      "terminal result",
+      "- **output:** 12 passed, 1 failed",
+      "- **exit_code:** 1",
+      "- **exit_code_meaning:** general error",
+      "- **hint:** rerun with --reporter=verbose",
+    ].join("\n");
+    const acpContent = [{ type: "content", content: { type: "text", text: block } }];
+
+    const withoutMarker = projectActivityPayload(
+      activity({
+        itemType: "command_execution",
+        toolCallId: "acp-call-1",
+        data: { toolCallId: "acp-call-1", kind: "execute", content: acpContent },
+      }),
+    );
+    const withMarker = projectActivityPayload(
+      activity({
+        itemType: "command_execution",
+        toolCallId: "acp-call-2",
+        data: {
+          toolCallId: "acp-call-2",
+          kind: "execute",
+          retainFullOutput: true,
+          content: acpContent,
+        },
+      }),
+    );
+
+    // Unmarked payloads keep the one-line preview and nothing else, exactly as before.
+    const plain = (withoutMarker.payload as { data: Record<string, unknown> }).data;
+    expect(plain.rawOutput).toEqual({ content: "terminal result" });
+
+    const retained = (withMarker.payload as { data: Record<string, unknown> }).data;
+    expect(retained.rawOutput).toEqual({ content: "terminal result", text: block });
+  });
+
+  it("keeps the head and the tail of an oversized retained block", () => {
+    const head = "terminal result\n";
+    const tail = "\n- **exit_code:** 1";
+    const body = "x".repeat(9_000);
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "command_execution",
+        toolCallId: "acp-call-3",
+        data: {
+          toolCallId: "acp-call-3",
+          kind: "execute",
+          retainFullOutput: true,
+          rawOutput: { content: `${head}${body}${tail}` },
+        },
+      }),
+    );
+
+    const data = (projected.payload as { data: Record<string, unknown> }).data;
+    const text = (data.rawOutput as { text: string }).text;
+    expect(text.startsWith("terminal result")).toBe(true);
+    // The exit code lives at the end of a Hermes block, so the tail has to survive.
+    expect(text.endsWith("- **exit_code:** 1")).toBe(true);
+    expect(text).toContain("middle of output omitted");
+    expect(text.length).toBeLessThan(4_200);
+  });
+
   it("normalizes Claude and OpenCode command inputs before slimming provider data", () => {
     const claude = projectActivityPayload(
       activity({

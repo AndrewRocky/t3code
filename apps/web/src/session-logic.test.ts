@@ -874,6 +874,60 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("carries retained tool output onto the entry, and only when the row has it", () => {
+    const block = ["terminal result", "- **output:** 12 passed", "- **exit_code:** 0"].join("\n");
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "with-output",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        tone: "tool",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          toolCallId: "tc-1",
+          data: {
+            toolCallId: "tc-1",
+            kind: "execute",
+            command: "pnpm test",
+            rawOutput: { content: "terminal result", text: block },
+          },
+        },
+      }),
+      makeActivity({
+        id: "without-output",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        tone: "tool",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          toolCallId: "tc-2",
+          data: {
+            toolCallId: "tc-2",
+            kind: "execute",
+            command: "pnpm lint",
+            rawOutput: { content: "lint result" },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+    const withOutput = entries.find((entry) => entry.id === "with-output");
+    const withoutOutput = entries.find((entry) => entry.id === "without-output");
+
+    expect(withOutput?.outputText).toBe(block);
+    // `detail` stays the one-line preview so the collapsed row is unchanged.
+    expect(withOutput?.detail).toBe("terminal result");
+    expect(withOutput?.command).toBe("pnpm test");
+    // Every other provider's rows carry no retained text at all.
+    expect(withoutOutput?.outputText).toBeUndefined();
+    expect(withoutOutput?.detail).toBe("lint result");
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

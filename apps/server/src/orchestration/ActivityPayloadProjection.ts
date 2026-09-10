@@ -330,6 +330,74 @@ function projectAcpContent(value: unknown): Record<string, unknown> | undefined 
 }
 
 /**
+ * Upper bound on retained tool output. The ACP layer already caps a tool
+ * call's text at `TOOL_CALL_CONTENT_MAX_CHARS` (8 000), so this is the second,
+ * tighter bound that decides what crosses the wire rather than what is stored.
+ */
+const RETAINED_OUTPUT_MAX_CHARS = 4_000;
+const RETAINED_OUTPUT_TRUNCATION_MARKER = "\n\n… middle of output omitted …\n\n";
+
+/**
+ * Keep the head and the tail. An agent that formats its own result blocks puts
+ * the heading first and the exit code last — Hermes' `terminal` block is
+ * literally `terminal result` / `- **output:** …` / `- **exit_code:** N` — so
+ * dropping either end loses the part a reader looks for first.
+ */
+function boundRetainedOutputText(value: string): string {
+  if (value.length <= RETAINED_OUTPUT_MAX_CHARS) {
+    return value;
+  }
+  const head = Math.floor(RETAINED_OUTPUT_MAX_CHARS * 0.6);
+  const tail = RETAINED_OUTPUT_MAX_CHARS - head;
+  return `${value.slice(0, head)}${RETAINED_OUTPUT_TRUNCATION_MARKER}${value.slice(value.length - tail)}`;
+}
+
+function acpContentText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const chunks: string[] = [];
+  for (const entryValue of value) {
+    const entry = asRecord(entryValue);
+    const content = asRecord(entry?.content);
+    if (entry?.type !== "content" || content?.type !== "text") {
+      continue;
+    }
+    const text = asTrimmedString(content.text);
+    if (text) {
+      chunks.push(text);
+    }
+  }
+  return chunks.length > 0 ? chunks.join("\n") : undefined;
+}
+
+/**
+ * The full text of a tool result, for a payload that asked for it.
+ *
+ * Only an adapter that knows its agent sends a bounded, human-readable result
+ * block sets `data.retainFullOutput`, so nothing else in the pipeline changes
+ * shape. Everything else still gets the one-line `rawOutput.content` summary
+ * and nothing more.
+ */
+function projectRetainedOutputText(data: Record<string, unknown>): string | undefined {
+  if (data.retainFullOutput !== true) {
+    return undefined;
+  }
+  const rawOutput = asRecord(data.rawOutput);
+  const streams = [asTrimmedString(rawOutput?.stdout), asTrimmedString(rawOutput?.stderr)].filter(
+    (entry): entry is string => entry !== null,
+  );
+  const text =
+    asTrimmedString(data.rawOutput) ??
+    asTrimmedString(rawOutput?.content) ??
+    asTrimmedString(rawOutput?.output) ??
+    (streams.length > 0 ? streams.join("\n") : undefined) ??
+    acpContentText(data.content);
+  return text ? boundRetainedOutputText(text) : undefined;
+}
+
+/**
+
  * Removes activity payload fields that no current client reads while retaining
  * the full payload in persistence and the event store.
  */
@@ -383,8 +451,14 @@ export function projectActivityPayload(
   }
 
   const rawOutput = projectRawOutput(data.rawOutput) ?? projectAcpContent(data.content);
-  if (rawOutput) {
-    projectedData.rawOutput = rawOutput;
+  // `content` stays the one-line collapsed preview every provider gets; `text`
+  // is the opt-in body, and only a payload that asked for it carries one.
+  const retainedText = projectRetainedOutputText(data);
+  if (rawOutput || retainedText) {
+    projectedData.rawOutput = {
+      ...rawOutput,
+      ...(retainedText ? { text: retainedText } : {}),
+    };
   }
 
   return {
