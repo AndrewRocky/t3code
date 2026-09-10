@@ -12,6 +12,7 @@ import {
   sessionUpdateIsReplay,
   syntheticLoadSessionResponseFromInitialize,
   toolCallProgressLength,
+  type AcpToolCallAugmentInput,
   type AcpToolCallState,
 } from "./AcpRuntimeModel.ts";
 
@@ -151,6 +152,142 @@ describe("AcpRuntimeModel", () => {
 
     expect(response.modes?.currentModeId).toBe("code");
     expect(response.modes?.availableModes).toHaveLength(2);
+  });
+
+  it("parses tool calls unchanged when no augmenter is configured", () => {
+    const notification = {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-augment-off",
+        title: "terminal: pnpm test",
+        kind: "execute",
+        content: [{ type: "content", content: { type: "text", text: "$ pnpm test" } }],
+      },
+    } satisfies EffectAcpSchema.SessionNotification;
+
+    const withoutOptions = parseSessionUpdateEvent(notification);
+    const withEmptyOptions = parseSessionUpdateEvent(notification, {});
+
+    expect(withoutOptions).toEqual(withEmptyOptions);
+    const [event] = withoutOptions.events;
+    expect(event?._tag).toBe("ToolCallUpdated");
+    if (event?._tag !== "ToolCallUpdated") {
+      throw new Error("expected a tool call event");
+    }
+    // The shape every other ACP provider keeps: a generic label and nothing to expand.
+    expect(event.toolCall.title).toBe("Ran command");
+    expect(event.toolCall.command).toBeUndefined();
+    expect(event.toolCall.detail).toBeUndefined();
+    expect(event.toolCall.data.files).toBeUndefined();
+  });
+
+  it("lets an augmenter supply the command, input, files and detail an agent omitted", () => {
+    const seen: Array<AcpToolCallAugmentInput> = [];
+    const result = parseSessionUpdateEvent(
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-augment-on",
+          title: "terminal: pnpm test",
+          kind: "execute",
+          content: [{ type: "content", content: { type: "text", text: "$ pnpm test" } }],
+          locations: [{ path: "/repo/apps/web/src/x.tsx" }],
+        },
+      } satisfies EffectAcpSchema.SessionNotification,
+      {
+        toolCallAugment: (input) => {
+          seen.push(input);
+          return {
+            command: "pnpm test",
+            files: [{ path: "/repo/apps/web/src/x.tsx" }],
+            detail: "ignored, presentation wins",
+            data: { retainFullOutput: true },
+          };
+        },
+      },
+    );
+
+    // The augmenter sees the agent's own title, before the generic label replaces it.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.title).toBe("terminal: pnpm test");
+    expect(seen[0]?.kind).toBe("execute");
+    expect(seen[0]?.status).toBe("pending");
+    expect(seen[0]?.command).toBeUndefined();
+    expect(seen[0]?.text).toBe("$ pnpm test");
+
+    const [event] = result.events;
+    if (event?._tag !== "ToolCallUpdated") {
+      throw new Error("expected a tool call event");
+    }
+    expect(event.toolCall.command).toBe("pnpm test");
+    // Presentation still owns the detail when it produced one.
+    expect(event.toolCall.detail).toBe("pnpm test");
+    expect(event.toolCall.data).toMatchObject({
+      toolCallId: "tool-augment-on",
+      kind: "execute",
+      command: "pnpm test",
+      files: [{ path: "/repo/apps/web/src/x.tsx" }],
+      retainFullOutput: true,
+    });
+  });
+
+  it("uses an augmenter's detail only when presentation produced none", () => {
+    const result = parseSessionUpdateEvent(
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-augment-detail",
+          title: "skill view (dataviz/SKILL.md)",
+          kind: "read",
+        },
+      } satisfies EffectAcpSchema.SessionNotification,
+      { toolCallAugment: () => ({ detail: "skill view (dataviz/SKILL.md)" }) },
+    );
+
+    const [event] = result.events;
+    if (event?._tag !== "ToolCallUpdated") {
+      throw new Error("expected a tool call event");
+    }
+    // A read with no path yields "Read file" and no detail, which is the
+    // unexpandable row shape; the augmenter fills it.
+    expect(event.toolCall.title).toBe("Read file");
+    expect(event.toolCall.detail).toBe("skill view (dataviz/SKILL.md)");
+  });
+
+  it("never lets an augmenter overwrite the fields the parser owns", () => {
+    const result = parseSessionUpdateEvent(
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-augment-guard",
+          title: "terminal: real command",
+          kind: "execute",
+          rawInput: { command: "real command" },
+        },
+      } satisfies EffectAcpSchema.SessionNotification,
+      {
+        toolCallAugment: () => ({
+          command: "spoofed",
+          data: { toolCallId: "spoofed", kind: "spoofed", command: "spoofed" },
+        }),
+      },
+    );
+
+    const [event] = result.events;
+    if (event?._tag !== "ToolCallUpdated") {
+      throw new Error("expected a tool call event");
+    }
+    expect(event.toolCall.command).toBe("real command");
+    expect(event.toolCall.data).toMatchObject({
+      toolCallId: "tool-augment-guard",
+      kind: "execute",
+      command: "real command",
+      rawInput: { command: "real command" },
+    });
   });
 
   it("projects typed ACP tool call updates into runtime events", () => {

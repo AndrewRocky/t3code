@@ -37,6 +37,7 @@ import {
   type SessionLoadGate,
   type AcpParsedSessionEvent,
   type AcpSessionModeState,
+  type AcpToolCallAugmenter,
   type AcpToolCallState,
 } from "./AcpRuntimeModel.ts";
 
@@ -107,6 +108,12 @@ export interface AcpSessionRuntimeOptions {
   ) => EffectAcpSchema.SessionNotification;
   /** Receives bounded stderr chunks. Redact secrets before logging. A failure closes the runtime. */
   readonly onStderr?: (text: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
+  /**
+   * Lets one adapter recover tool-call facts its agent carries somewhere other
+   * than `rawInput`. Omitted by every adapter whose agent fills `rawInput` in,
+   * and a runtime without one parses exactly as it did before.
+   */
+  readonly toolCallAugment?: AcpToolCallAugmenter;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -539,6 +546,7 @@ export const make = (
 
     const processSessionUpdate = (notification: EffectAcpSchema.SessionNotification) =>
       handleSessionUpdate({
+        ...(options.toolCallAugment ? { toolCallAugment: options.toolCallAugment } : {}),
         queue: eventQueue,
         modeStateRef,
         configOptionsRef,
@@ -1212,6 +1220,7 @@ const handleSessionUpdate = ({
   assistantSegmentRef,
   assistantItemRuntimeId,
   params,
+  toolCallAugment,
 }: {
   readonly queue: Queue.Queue<AcpSessionRuntimeEvent>;
   readonly modeStateRef: Ref.Ref<AcpSessionModeState | undefined>;
@@ -1221,12 +1230,16 @@ const handleSessionUpdate = ({
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly assistantItemRuntimeId: string;
   readonly params: EffectAcpSchema.SessionNotification;
+  readonly toolCallAugment?: AcpToolCallAugmenter;
 }): Effect.Effect<void> =>
   Effect.gen(function* () {
     if (params.update.sessionUpdate === "config_option_update") {
       yield* Ref.set(configOptionsRef, params.update.configOptions);
     }
-    const parsed = parseSessionUpdateEvent(params);
+    const parsed = parseSessionUpdateEvent(
+      params,
+      toolCallAugment ? { toolCallAugment } : undefined,
+    );
     if (parsed.modeId) {
       yield* Ref.update(modeStateRef, (current) =>
         current === undefined ? current : updateModeState(current, parsed.modeId!),
