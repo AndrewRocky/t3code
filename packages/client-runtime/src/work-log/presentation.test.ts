@@ -529,6 +529,40 @@ describe("workEntryViewedImagePath", () => {
 });
 
 describe("toolGroupAction", () => {
+  // ACP has no canonical item type for a read, so a read arrives as
+  // `dynamic_tool_call` and the title is the only signal. The producer
+  // (`deriveToolActivityPresentation`) writes "Read file", so this match has to
+  // be case-insensitive or every ACP file read falls into the generic bucket.
+  const acpRead: WorkLogPresentationEntry = {
+    label: "Read file",
+    tone: "tool",
+    itemType: "dynamic_tool_call",
+    toolTitle: "Read file",
+    detail: "apps/server/src/provider/acp/AcpRuntimeModel.ts",
+  };
+
+  it("counts an ACP file read as a read", () => {
+    expect(toolGroupAction(acpRead)).toBe("read");
+    expect(summarizeToolGroup([acpRead])).toBe("Read 1 file");
+    expect(summarizeToolGroup([acpRead, acpRead])).toBe("Read 2 files");
+  });
+
+  it("still treats a tool call with no read title as a generic tool", () => {
+    const other: WorkLogPresentationEntry = {
+      label: "Tool call",
+      tone: "tool",
+      itemType: "dynamic_tool_call",
+      toolTitle: "list_pull_requests",
+    };
+    expect(toolGroupAction(other)).toBe("other");
+  });
+
+  it("classifies by the read title before it looks at changed files", () => {
+    expect(toolGroupAction({ ...acpRead, changedFiles: ["apps/web/src/session-logic.ts"] })).toBe(
+      "read",
+    );
+  });
+
   it("groups legacy Claude image reads with other reads", () => {
     expect(
       toolGroupAction({
