@@ -3011,8 +3011,12 @@ function buildToolCallExpandedBody(
     addBlock(raw ?? command);
   }
   const detail = workEntry.detail?.trim();
+  // `outputText` is the full result block when the provider's payload retained
+  // one; `detail` is the one-line preview cut from the same text, so showing
+  // both would repeat the first line.
+  const body = workEntry.outputText?.trim() || detail;
   if (detail !== viewedImagePath?.trim()) {
-    addBlock(detail);
+    addBlock(body);
   }
   const viewedImagePaths = new Set(
     viewedImagePath

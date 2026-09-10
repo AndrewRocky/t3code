@@ -68,6 +68,11 @@ export interface WorkLogEntry {
   toolIcon?: import("@t3tools/contracts").ToolActivityIcon;
   toolSource?: import("@t3tools/contracts").ToolActivitySource;
   toolData?: unknown;
+  /**
+   * Full tool output, when the provider's payload asked for it to be retained.
+   * `detail` stays the one-line preview; this is what the expanded row shows.
+   */
+  outputText?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
@@ -587,6 +592,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (toolData !== undefined) {
       entry.toolData = toolData;
     }
+  }
+  const outputText = extractRetainedToolOutput(payload);
+  if (outputText) {
+    entry.outputText = outputText;
   }
   if (itemType) {
     entry.itemType = itemType;
@@ -1166,6 +1175,19 @@ function summarizeToolRawOutput(payload: Record<string, unknown> | null): string
 function extractToolOutput(payload: Record<string, unknown> | null): string | null {
   const output = extractCommandOutputText(payload?.data);
   return output ? stripTrailingExitCode(output).output : null;
+}
+
+/**
+ * Full output the server chose to retain for this row, if any.
+ *
+ * `ActivityPayloadProjection` writes `rawOutput.text` only for a payload whose
+ * provider marked it, so a row from any other provider has none and renders
+ * exactly as before.
+ */
+function extractRetainedToolOutput(payload: Record<string, unknown> | null): string | null {
+  const rawOutput = asRecord(asRecord(payload?.data)?.rawOutput);
+  const text = asTrimmedString(rawOutput?.text);
+  return text ? stripTrailingExitCode(text).output : null;
 }
 
 function isCommandToolDetail(payload: Record<string, unknown> | null, heading: string): boolean {
