@@ -6,7 +6,10 @@ import {
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   shouldPreserveAssistantLineBreaks,
+  summarizeToolGroup,
+  toolGroupAction,
 } from "./MessagesTimeline.logic";
+import type { WorkLogEntry } from "../../session-logic";
 
 describe("shouldPreserveAssistantLineBreaks", () => {
   it("preserves Claude insight formatting without changing regular markdown", () => {
@@ -16,6 +19,55 @@ describe("shouldPreserveAssistantLineBreaks", () => {
       ),
     ).toBe(true);
     expect(shouldPreserveAssistantLineBreaks("A normal\\nmarkdown paragraph")).toBe(false);
+  });
+});
+
+function workEntry(overrides: Partial<WorkLogEntry>): WorkLogEntry {
+  return {
+    id: overrides.id ?? "entry",
+    createdAt: "2026-01-01T00:00:00Z",
+    label: "Read file",
+    tone: "tool",
+    ...overrides,
+  } as WorkLogEntry;
+}
+
+describe("toolGroupAction", () => {
+  it("counts an ACP file read as a read", () => {
+    // ACP has no canonical item type for a read, so a read arrives as
+    // `dynamic_tool_call` and the title is the only signal. The producer
+    // (`deriveToolActivityPresentation`) writes "Read file".
+    const entry = workEntry({
+      id: "acp-read",
+      itemType: "dynamic_tool_call",
+      toolTitle: "Read file",
+      detail: "apps/server/src/provider/acp/AcpRuntimeModel.ts",
+    });
+
+    expect(toolGroupAction(entry)).toBe("read");
+    expect(summarizeToolGroup([entry])).toBe("Read 1 file");
+    expect(summarizeToolGroup([entry, { ...entry, id: "acp-read-2" }])).toBe("Read 2 files");
+  });
+
+  it("still treats a tool call with no read title as a generic tool", () => {
+    expect(
+      toolGroupAction(
+        workEntry({ id: "other", itemType: "dynamic_tool_call", toolTitle: "list_pull_requests" }),
+      ),
+    ).toBe("other");
+  });
+
+  it("classifies by the read title before it looks at changed files", () => {
+    expect(
+      toolGroupAction(
+        workEntry({
+          id: "edit",
+          itemType: "dynamic_tool_call",
+          toolTitle: "Read file",
+          changedFiles: ["apps/web/src/session-logic.ts"],
+        }),
+      ),
+    ).toBe("read");
   });
 });
 

@@ -53,7 +53,11 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
   if (
     entry.requestKind === "file-read" ||
     entry.itemType === "image_view" ||
-    (entry.itemType === "dynamic_tool_call" && entry.toolTitle === "Read File")
+    // `deriveToolActivityPresentation` emits "Read file"; this compared against
+    // "Read File" and so never matched. ACP has no canonical item type for a
+    // read, which makes this the only route to the read bucket for one, so
+    // every ACP file read counted as a generic tool.
+    (entry.itemType === "dynamic_tool_call" && entry.toolTitle?.toLowerCase() === "read file")
   ) {
     return "read";
   }
