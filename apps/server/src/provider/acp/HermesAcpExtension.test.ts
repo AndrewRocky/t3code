@@ -4,7 +4,6 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   hermesUpdateCarriesCompactionSummary,
-  parseHermesAvailableCommands,
   parseHermesSessionInfo,
   parseHermesSessionProvenance,
   parseHermesUsageUpdate,
@@ -176,52 +175,5 @@ describe("hermesUpdateCarriesCompactionSummary", () => {
       }),
     );
     assert.isFalse(hermesUpdateCarriesCompactionSummary(textChunk));
-  });
-});
-
-describe("parseHermesAvailableCommands", () => {
-  it("maps the slash-command catalog with hints", () => {
-    assert.deepStrictEqual(
-      [
-        ...parseHermesAvailableCommands({
-          sessionUpdate: "available_commands_update",
-          availableCommands: [
-            {
-              name: "model",
-              description: "Show current model and provider, or switch models",
-              input: { hint: "model name to switch to" },
-            },
-            { name: "compress", description: "Compress conversation context" },
-          ],
-        }),
-      ],
-      [
-        {
-          name: "model",
-          description: "Show current model and provider, or switch models",
-          hint: "model name to switch to",
-        },
-        { name: "compress", description: "Compress conversation context" },
-      ],
-    );
-  });
-
-  it("skips entries without a name", () => {
-    assert.deepStrictEqual(
-      [
-        ...parseHermesAvailableCommands({
-          sessionUpdate: "available_commands_update",
-          availableCommands: [
-            { name: "   ", description: "blank" },
-            { name: "help", description: "List available commands" },
-          ],
-        }),
-      ],
-      [{ name: "help", description: "List available commands" }],
-    );
-  });
-
-  it("returns an empty list for unrelated updates", () => {
-    assert.deepStrictEqual([...parseHermesAvailableCommands(textChunk)], []);
   });
 });

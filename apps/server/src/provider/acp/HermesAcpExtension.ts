@@ -13,8 +13,6 @@
  *   (`acp_adapter/server.py _build_usage_update`).
  * - `session_info_update` → an auto-generated session title, plus session
  *   provenance when a mid-turn compression rotated Hermes' internal session.
- * - `available_commands_update` → the slash commands the adapter intercepts
- *   before they reach the model (`server.py _ADVERTISED_COMMANDS`).
  *
  * **Session provenance is the subtle one.** Hermes keeps the ACP session id
  * stable but rotates its *internal* session id when it compresses context
@@ -208,41 +206,4 @@ export function parseHermesSessionInfo(update: SessionUpdate): HermesSessionInfo
 export function hermesUpdateCarriesCompactionSummary(update: SessionUpdate): boolean {
   const meta = hermesMeta(update);
   return meta?.compactionSummary === true || meta?.containsCompactionSummary === true;
-}
-
-// ── available_commands_update ─────────────────────────────────────────
-
-export interface HermesAvailableCommand {
-  readonly name: string;
-  readonly description?: string;
-  readonly hint?: string;
-}
-
-/**
- * Parse the slash-command catalog. Hermes intercepts these itself when a
- * prompt is text-only, so they never reach the model — surfacing them lets the
- * composer offer the same completions the Hermes TUI does.
- */
-export function parseHermesAvailableCommands(
-  update: SessionUpdate,
-): ReadonlyArray<HermesAvailableCommand> {
-  if (update.sessionUpdate !== "available_commands_update") {
-    return [];
-  }
-  const commands: Array<HermesAvailableCommand> = [];
-  for (const entry of update.availableCommands) {
-    const name = nonEmptyString(entry.name);
-    if (name === undefined) {
-      continue;
-    }
-    const description = nonEmptyString(entry.description);
-    const input = entry.input;
-    const hint = isRecord(input) ? nonEmptyString(input.hint) : undefined;
-    commands.push({
-      name,
-      ...(description !== undefined ? { description } : {}),
-      ...(hint !== undefined ? { hint } : {}),
-    });
-  }
-  return commands;
 }
