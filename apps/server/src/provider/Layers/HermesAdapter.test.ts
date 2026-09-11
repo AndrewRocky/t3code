@@ -401,12 +401,13 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
       yield* Fiber.interrupt(eventsFiber);
 
       // `AcpRuntimeModel` parses only the five shared turn-content events, so
-      // these three reach the stream solely through the Hermes handler.
+      // these two reach the stream solely through the Hermes handler.
       const usage = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
       assert.isDefined(usage);
       if (usage?.type === "thread.token-usage.updated") {
         assert.equal(usage.payload.usage.usedTokens, 4096);
         assert.equal(usage.payload.usage.maxTokens, 272000);
+        assert.isTrue(usage.payload.usage.compactsAutomatically);
       }
 
       const metadataEvents = runtimeEvents.filter(
@@ -429,12 +430,17 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
         });
       }
 
+      // `available_commands_update` is deliberately NOT forwarded: the mock
+      // sends one, and no runtime event may carry it. Hermes' command list is
+      // static per version, so `HermesProvider` advertises it on the snapshot
+      // where the composer's slash menu actually reads it; the metadata bag
+      // this used to populate is read by nothing.
       const commands = metadataEvents.find(
         (event) =>
           event.type === "thread.metadata.updated" &&
           event.payload.metadata?.hermesAvailableCommands !== undefined,
       );
-      assert.isDefined(commands);
+      assert.isUndefined(commands);
 
       yield* adapter.stopSession(threadId);
     }),
@@ -557,6 +563,99 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
 
       const invalid = yield* adapter.rollbackThread(threadId, 0).pipe(Effect.result);
       assert.isTrue(invalid._tag === "Failure");
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("rewrites a `$skill` token into a skill_view directive on the wire", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-skill-directive-thread");
+      const home = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-skill-home-")),
+      );
+      // Category-nested, as a real install is.
+      const skillDir = NodePath.join(home, "skills", "productivity", "pdf");
+      yield* Effect.promise(() => NodeFSP.mkdir(skillDir, { recursive: true }));
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(skillDir, "SKILL.md"),
+          ["---", "name: pdf", "description: Work with PDFs.", "---", "", "# Body"].join("\n"),
+          "utf8",
+        ),
+      );
+
+      const requestLogPath = NodePath.join(home, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+      );
+      const adapter = yield* makeHermesAdapter(
+        decodeHermesSettings({ binaryPath: wrapperPath, homePath: home, enabled: true }),
+      ).pipe(Effect.orDie);
+
+      const turnCompleted = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed" ? Deferred.succeed(turnCompleted, undefined) : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "$pdf summarise this", attachments: [] });
+      yield* Deferred.await(turnCompleted);
+      yield* Fiber.interrupt(eventsFiber);
+
+      const requests = yield* waitForFileContent(requestLogPath, 80, "session/prompt");
+      const promptLine = requests.split("\n").findLast((line) => line.includes('"session/prompt"'));
+      assert.isDefined(promptLine);
+      const promptText = JSON.parse(promptLine ?? "{}").params.prompt[0].text as string;
+
+      // The user's own token survives — the composer chip and the stored
+      // message must still read the way they typed it.
+      assert.isTrue(promptText.startsWith("$pdf summarise this"));
+      assert.include(promptText, 'skill_view("pdf")');
+      assert.include(promptText, "stop and tell the user");
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("leaves a prompt with no skill token byte-identical", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-no-directive-thread");
+      const home = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-skill-home-none-")),
+      );
+      const requestLogPath = NodePath.join(home, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+      );
+      const adapter = yield* makeHermesAdapter(
+        decodeHermesSettings({ binaryPath: wrapperPath, homePath: home, enabled: true }),
+      ).pipe(Effect.orDie);
+
+      const turnCompleted = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed" ? Deferred.succeed(turnCompleted, undefined) : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "refactor the parser", attachments: [] });
+      yield* Deferred.await(turnCompleted);
+      yield* Fiber.interrupt(eventsFiber);
+
+      const requests = yield* waitForFileContent(requestLogPath, 80, "session/prompt");
+      const promptLine = requests.split("\n").findLast((line) => line.includes('"session/prompt"'));
+      const promptText = JSON.parse(promptLine ?? "{}").params.prompt[0].text as string;
+      assert.equal(promptText, "refactor the parser");
 
       yield* adapter.stopSession(threadId);
     }),

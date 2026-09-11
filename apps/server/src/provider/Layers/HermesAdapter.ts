@@ -14,12 +14,15 @@
  *    `current_mode_update`, so the mode we requested is recorded optimistically
  *    — the same thing the agent does to its own in-memory state.
  *
- * 3. **Three notifications carry state the shared runtime model drops.**
- *    `usage_update`, `session_info_update`, and `available_commands_update` are
- *    read through a second, raw `session/update` handler and re-emitted as
+ * 3. **Two notifications carry state the shared runtime model drops.**
+ *    `usage_update` and `session_info_update` are read through a second, raw
+ *    `session/update` handler and re-emitted as
  *    `thread.token-usage.updated` / `thread.metadata.updated`. Registering a
  *    second handler is safe: the client appends handlers rather than replacing
  *    them, so the parsed turn-content stream is untouched.
+ *    `available_commands_update` is ignored here on purpose: the command list
+ *    is static per Hermes version, so the provider snapshot advertises it
+ *    directly (`HermesProvider.ts`, `HERMES_SLASH_COMMANDS`).
  *
  * 4. **The liveness watchdog matters more here than elsewhere.** Hermes runs
  *    prompts on a four-worker thread pool shared by every session in the
@@ -46,6 +49,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   RuntimeRequestId,
+  type ServerProviderSkill,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -91,7 +95,6 @@ import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   HERMES_EXTENSION_SOURCE,
   type HermesSessionProvenance,
-  parseHermesAvailableCommands,
   parseHermesSessionInfo,
   parseHermesSessionProvenance,
   parseHermesUsageUpdate,
@@ -104,6 +107,8 @@ import {
   resolveHermesAcpBaseModelId,
 } from "../acp/HermesAcpSupport.ts";
 import { syncHermesCommandRules } from "../Drivers/HermesCommandRules.ts";
+import { applyHermesSkillDirective } from "../Drivers/HermesSkillDirective.ts";
+import { discoverHermesSkills } from "../Drivers/HermesSkills.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -118,6 +123,14 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonStri
 const PROVIDER = ProviderDriverKind.make("hermes");
 const HERMES_RESUME_VERSION = 1 as const;
 const NANOS_PER_MILLI = 1_000_000n;
+
+/**
+ * How long a workspace's skill-name list is reused for `$token` resolution.
+ * Short enough that installing a skill takes effect within a turn or two,
+ * long enough that steering a live turn does not re-walk the skill roots on
+ * every prompt.
+ */
+const SKILL_NAME_CACHE_TTL_NANOS = BigInt(30_000) * NANOS_PER_MILLI;
 /**
  * Hermes streams its reasoning as `agent_thought_chunk`, which the shared ACP
  * model parses into reasoning content deltas, so a thinking turn now reports
@@ -163,6 +176,8 @@ interface HermesTurnLivenessSignal {
 interface HermesSessionContext {
   readonly threadId: ThreadId;
   readonly acpSessionId: string;
+  /** Resolved workspace for this session; project-scoped skill roots hang off it. */
+  readonly cwd: string;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -384,6 +399,45 @@ export function makeHermesAdapter(
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+
+    /**
+     * Skill names per workspace, for resolving a `$token` in a prompt.
+     *
+     * The catalog is read from disk rather than handed down from the provider
+     * snapshot: the snapshot refreshes on its own schedule, and a skill
+     * installed mid-session should be invocable in the next turn rather than
+     * after the next probe. The scan is cheap and the TTL keeps a burst of
+     * steers from re-walking the tree, so this stays a filesystem read on the
+     * turn path with a bounded cost.
+     *
+     * Only names are cached, and only for building the directive — the
+     * picker's own list still comes from the snapshot.
+     */
+    const skillNameCache = new Map<
+      string,
+      { readonly names: ReadonlyArray<string>; readonly readAtNanos: bigint }
+    >();
+    const resolveKnownSkillNames = Effect.fn("hermes.resolveKnownSkillNames")(function* (
+      cwd: string,
+    ) {
+      const nowNanos = yield* Clock.monotonicTimeNanos;
+      const cached = skillNameCache.get(cwd);
+      if (cached !== undefined && nowNanos - cached.readAtNanos < SKILL_NAME_CACHE_TTL_NANOS) {
+        return cached.names;
+      }
+      const skills = yield* discoverHermesSkills(
+        hermesSettings,
+        options?.environment ?? process.env,
+        cwd,
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.orElseSucceed((): ReadonlyArray<ServerProviderSkill> => []),
+      );
+      const names = skills.map((skill) => skill.name);
+      skillNameCache.set(cwd, { names, readAtNanos: nowNanos });
+      return names;
+    });
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -983,21 +1037,12 @@ export function makeHermesAdapter(
           return;
         }
 
-        const availableCommands = parseHermesAvailableCommands(update);
-        if (availableCommands.length > 0) {
-          yield* offerRuntimeEvent({
-            type: "thread.metadata.updated",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId,
-            payload: { metadata: { hermesAvailableCommands: availableCommands } },
-            raw: {
-              source: "acp.jsonrpc",
-              method: "session/update",
-              payload: update,
-            },
-          });
-        }
+        // `available_commands_update` is deliberately not forwarded. Hermes'
+        // command list is a module constant on its side, so the snapshot
+        // advertises it statically from `HermesProvider.ts`
+        // (`HERMES_SLASH_COMMANDS`), which is the field the composer's slash
+        // menu actually reads. Re-emitting it as `thread.metadata.updated`
+        // fed `payload.metadata`, and nothing reads that bag — see H-05.
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Failed to process Hermes session metadata update.", {
@@ -1290,6 +1335,7 @@ export function makeHermesAdapter(
             session,
             scope: sessionScope,
             acp,
+            cwd,
             notificationFiber: undefined,
             pendingApprovals,
             turns: [],
@@ -1499,7 +1545,16 @@ export function makeHermesAdapter(
                 ? resolveHermesAcpBaseModelId(turnModelSelection.model)
                 : undefined;
 
-              const text = input.input?.trim();
+              // Hermes has no `$name` token syntax, so a skill the user
+              // picked in the composer would otherwise arrive as prose. Name
+              // the choice and let Hermes load it through its own
+              // `skill_view` tool — see `../Drivers/HermesSkillDirective.ts`
+              // for why this is preferred over inlining the skill body. The
+              // user's own text is preserved; only the wire prompt grows.
+              const trimmedInput = input.input?.trim();
+              const text = trimmedInput
+                ? applyHermesSkillDirective(trimmedInput, yield* resolveKnownSkillNames(ctx.cwd))
+                : trimmedInput;
               // Hermes declares `promptCapabilities.image: true` and nothing
               // else; audio blocks are accepted by its type union but silently
               // dropped, and embedded resources are declared unsupported. So
