@@ -105,7 +105,45 @@ every session start. See [`AcpSessionRuntime.ts`](../../apps/server/src/provider
 
 The shared runtime model parses only the turn-content notifications. An agent that sends more —
 Hermes emits `usage_update`, `session_info_update`, and `available_commands_update` — needs a second
-raw `session/update` handler in its adapter, because handlers append rather than replace.
+raw `session/update` handler in its adapter, because handlers append rather than replace. Hermes'
+adapter re-emits the first two as `thread.token-usage.updated` and `thread.metadata.updated` and
+ignores the third: its command list is a module constant on the Hermes side, so the provider
+snapshot advertises it statically instead.
+
+Skills and slash commands have no ACP surface at all in Hermes — `initialize` and `session/new`
+mention no skill capability, and the only skill traffic a client sees is ordinary `tool_call`
+notifications for Hermes' own `skills_list` / `skill_view` / `skill_manage` tools. Both are
+therefore assembled provider-side, and each choice there is a constraint worth keeping:
+
+- Slash commands are a constant in
+  [`HermesProvider.ts`](../../apps/server/src/provider/Layers/HermesProvider.ts) attached to every
+  snapshot an installed Hermes produces, degraded ones included, because Hermes intercepts them
+  itself with no model call. Three of the nine are withheld: `model` collides with T3 Code's
+  built-in `/model` (provider commands are deduplicated against skills, never against built-ins),
+  and `steer` / `queue` duplicate native steering.
+- Skills come from a recursive filesystem scan in
+  [`HermesSkills.ts`](../../apps/server/src/provider/Drivers/HermesSkills.ts), because
+  `hermes skills list` has no `--json` and the on-disk layout is the stable contract. Recursive is
+  load-bearing: Hermes installs every skill under a category
+  (`skills/<category>/<skill>/SKILL.md`), so a single-level scan finds none of the bundled ones.
+  [`HermesSkillState.ts`](../../apps/server/src/provider/Drivers/HermesSkillState.ts) then
+  annotates `enabled` from `hermes skills list --enabled-only`, the only route to Hermes' config
+  denylists, its `platforms:` / `environments:` gates, and its trusted-project quarantine. That
+  pass fails open in every failure mode, so it can never be the reason the picker is empty.
+- Invoking a skill needs a bridge, because Hermes has no `$name` token syntax and the composer's
+  `$skill` would otherwise arrive as prose.
+  [`HermesSkillDirective.ts`](../../apps/server/src/provider/Drivers/HermesSkillDirective.ts)
+  appends a directive naming the choice and asking Hermes to load it with `skill_view(name)`,
+  leaving the user's own text intact. Inlining the `SKILL.md` was rejected: it spends the context
+  Hermes is designed not to spend, and `skill_view(preprocess=True)` already runs Hermes' own
+  preprocessing.
+
+`HERMES_PLATFORM` is left unset on every Hermes spawn. It names a gateway channel (`cli`,
+`discord`, …), not the host OS, and Hermes' own ACP adapter never sets it. An unrecognised value
+would classify the session as a human messaging surface — `NON_MESSAGING_SESSION_SURFACES` is
+default-deny — which silently turns `agent.verify_on_stop: auto` off. A user who wants that key to
+apply can set the variable under the instance's environment variables, which are merged into the
+spawn environment already.
 
 Command-level approval granularity has no ACP surface at all. Hermes' own
 `command_allowlist` and `approvals.deny` are checked before it ever sends
