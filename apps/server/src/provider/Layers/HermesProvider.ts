@@ -26,6 +26,7 @@ import {
   type ModelCapabilities,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -43,6 +44,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { discoverHermesSkills } from "../Drivers/HermesSkills.ts";
+import {
+  annotateHermesSkillsWithEnableState,
+  discoverHermesEnabledSkillNames,
+} from "../Drivers/HermesSkillState.ts";
 import {
   formatHermesModelLabel,
   hermesAcpCheckArgs,
@@ -95,6 +100,45 @@ const HERMES_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [];
 const ACP_EXTRA_INSTALL_HINT =
   "Hermes is installed but its ACP adapter is missing. Install it with `pip install -e '.[acp]'` in the Hermes checkout, or re-run the Hermes installer.";
 
+/**
+ * The slash commands Hermes intercepts itself.
+ *
+ * Hermes advertises nine over ACP (`acp_adapter/commands.py:_COMMANDS`) and
+ * handles every one locally, with no LLM call, when the prompt is text-only
+ * (`acp_adapter/server.py:790-797`). It sends them once per
+ * `session/new|load|resume|fork` as an `available_commands_update`; the list
+ * is a module constant on its side, so hardcoding ours cannot drift within a
+ * Hermes version and a version bump is a deliberate update here.
+ *
+ * Three of the nine are deliberately withheld:
+ *
+ * - `model` collides with T3's built-in `/model`
+ *   (`apps/web/src/components/chat/ChatComposer.tsx`), which opens the model
+ *   picker instead of sending text. Provider commands are deduplicated
+ *   against *skills* but never against built-ins
+ *   (`packages/client-runtime/src/providerSkills.ts`), so advertising it would
+ *   put two `/model` rows in the menu with different behaviour. The picker is
+ *   the better affordance, so this one stays T3's.
+ * - `steer` and `queue` duplicate a capability T3 already drives natively: a
+ *   `sendTurn` arriving while a prompt is in flight is treated as a steer, and
+ *   Hermes itself decides whether to redirect the live turn or queue behind it.
+ *   Advertising them would invite a user to type what the composer already
+ *   does.
+ *
+ * Attached to every snapshot an installed Hermes produces, including the
+ * degraded ones, so a failed model discovery does not also empty the command
+ * menu — Claude does the same (`ClaudeProvider.ts`), while Codex attaches its
+ * single command on the success path only and loses the menu when sick.
+ */
+const HERMES_SLASH_COMMANDS: ReadonlyArray<ServerProviderSlashCommand> = [
+  { name: "help", description: "List available commands" },
+  { name: "tools", description: "List available tools with descriptions" },
+  { name: "context", description: "Show conversation message counts by role" },
+  { name: "compress", description: "Compress conversation context" },
+  { name: "reset", description: "Clear conversation history" },
+  { name: "version", description: "Show Hermes version" },
+];
+
 function hermesModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting> | undefined,
   builtInModels: ReadonlyArray<ServerProviderModel> = HERMES_BUILT_IN_MODELS,
@@ -130,6 +174,7 @@ export function buildInitialHermesProviderSnapshot(
       enabled: true,
       checkedAt,
       models,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version: null,
@@ -254,6 +299,9 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       enabled: hermesSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      // An install that is present but broken keeps its command menu; a
+      // missing binary has nothing to offer one for.
+      ...(isCommandMissingCause(error) ? {} : { slashCommands: HERMES_SLASH_COMMANDS }),
       probe: {
         installed: !isCommandMissingCause(error),
         version: null,
@@ -272,6 +320,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       enabled: hermesSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version: null,
@@ -295,6 +344,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       enabled: hermesSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version,
@@ -322,6 +372,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       enabled: hermesSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version,
@@ -342,6 +393,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       enabled: hermesSettings.enabled,
       checkedAt,
       models: fallbackModels,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version,
@@ -352,7 +404,15 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     });
   }
 
-  const skills = yield* discoverHermesSkills(hermesSettings, environment, cwd);
+  // Existence and paths come from the filesystem scan; enable-state comes
+  // from Hermes, which is the only party that can apply its config
+  // denylists, the `platforms:`/`environments:` gates, and the trusted-project
+  // quarantine. The annotation fails open — an unreachable or unparseable
+  // listing leaves every discovered skill enabled, exactly as before it
+  // existed — so it can never be the reason the picker is empty.
+  const discoveredSkills = yield* discoverHermesSkills(hermesSettings, environment, cwd);
+  const skillListing = yield* discoverHermesEnabledSkillNames(hermesSettings, environment, cwd);
+  const skills = annotateHermesSkillsWithEnableState(discoveredSkills, skillListing);
 
   const discoveryExit = yield* discoverHermesModelsViaAcp(hermesSettings, environment, cwd).pipe(
     Effect.timeoutOption(HERMES_ACP_MODEL_DISCOVERY_TIMEOUT_MS),
@@ -368,6 +428,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       checkedAt,
       models: fallbackModels,
       skills,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version,
@@ -387,6 +448,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       checkedAt,
       models: fallbackModels,
       skills,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version,
@@ -413,6 +475,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       checkedAt,
       models,
       skills,
+      slashCommands: HERMES_SLASH_COMMANDS,
       probe: {
         installed: true,
         version,
@@ -430,6 +493,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     checkedAt,
     models,
     skills,
+    slashCommands: HERMES_SLASH_COMMANDS,
     probe: {
       installed: true,
       version,

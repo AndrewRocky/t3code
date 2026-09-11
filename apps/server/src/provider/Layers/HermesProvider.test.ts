@@ -47,6 +47,51 @@ describe("buildInitialHermesProviderSnapshot", () => {
     }),
   );
 
+  it.effect("advertises the slash commands Hermes handles locally", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* buildInitialHermesProviderSnapshot(
+        decodeHermesSettings({ enabled: true }),
+      );
+      // Attached before any probe has run, so the command menu is populated
+      // from the first render and survives a degraded probe — Claude does the
+      // same, while Codex attaches its one command on the success path only.
+      assert.deepStrictEqual(
+        snapshot.slashCommands.map((command) => command.name),
+        ["help", "tools", "context", "compress", "reset", "version"],
+      );
+      // `/context` and `/compress` are the two that expose Hermes'
+      // compression-based long sessions, so they carry real descriptions.
+      assert.equal(
+        snapshot.slashCommands.find((command) => command.name === "compress")?.description,
+        "Compress conversation context",
+      );
+    }),
+  );
+
+  it.effect("withholds the three commands T3 already covers", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* buildInitialHermesProviderSnapshot(
+        decodeHermesSettings({ enabled: true }),
+      );
+      const names = new Set(snapshot.slashCommands.map((command) => command.name));
+      // `model` would sit beside T3's built-in `/model` with different
+      // behaviour: provider commands are deduplicated against skills but
+      // never against built-ins.
+      assert.isFalse(names.has("model"));
+      // `steer` and `queue` duplicate native steering — a sendTurn during a
+      // live turn already redirects or queues, as Hermes decides.
+      assert.isFalse(names.has("steer"));
+      assert.isFalse(names.has("queue"));
+    }),
+  );
+
+  it.effect("offers no commands while Hermes is disabled", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* buildInitialHermesProviderSnapshot(decodeHermesSettings({}));
+      assert.deepStrictEqual([...snapshot.slashCommands], []);
+    }),
+  );
+
   it.effect("ships no built-in models", () =>
     Effect.gen(function* () {
       const snapshot = yield* buildInitialHermesProviderSnapshot(
