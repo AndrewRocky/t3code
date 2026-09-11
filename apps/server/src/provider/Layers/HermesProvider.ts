@@ -411,7 +411,14 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
   // existed — so it can never be the reason the picker is empty.
   const discoveredSkills = yield* discoverHermesSkills(hermesSettings, environment, cwd);
   const skillListing = yield* discoverHermesEnabledSkillNames(hermesSettings, environment, cwd);
-  const skills = annotateHermesSkillsWithEnableState(discoveredSkills, skillListing);
+  const annotatedSkills = annotateHermesSkillsWithEnableState(discoveredSkills, skillListing);
+  if (annotatedSkills === undefined && discoveredSkills.length > 0) {
+    yield* Effect.logWarning(
+      "Could not apply `hermes skills list --enabled-only` to the discovered skills; treating every one as enabled.",
+      { discoveredSkills: discoveredSkills.length, listingRows: skillListing?.length },
+    );
+  }
+  const skills = annotatedSkills ?? discoveredSkills;
 
   const discoveryExit = yield* discoverHermesModelsViaAcp(hermesSettings, environment, cwd).pipe(
     Effect.timeoutOption(HERMES_ACP_MODEL_DISCOVERY_TIMEOUT_MS),
