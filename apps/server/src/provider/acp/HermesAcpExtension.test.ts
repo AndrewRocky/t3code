@@ -21,7 +21,7 @@ describe("parseHermesUsageUpdate", () => {
   it("maps context size and usage onto the token-usage snapshot", () => {
     assert.deepStrictEqual(
       parseHermesUsageUpdate({ sessionUpdate: "usage_update", size: 272000, used: 4096 }),
-      { usedTokens: 4096, maxTokens: 272000 },
+      { usedTokens: 4096, maxTokens: 272000, compactsAutomatically: true },
     );
   });
 
@@ -30,7 +30,7 @@ describe("parseHermesUsageUpdate", () => {
     // length reports 0, which must not reach the schema.
     assert.deepStrictEqual(
       parseHermesUsageUpdate({ sessionUpdate: "usage_update", size: 0, used: 10 }),
-      { usedTokens: 10 },
+      { usedTokens: 10, compactsAutomatically: true },
     );
   });
 
@@ -38,7 +38,7 @@ describe("parseHermesUsageUpdate", () => {
     // `estimate_request_tokens_rough` is an estimate, and JSON has no ints.
     assert.deepStrictEqual(
       parseHermesUsageUpdate({ sessionUpdate: "usage_update", size: 1000.5, used: 12.9 }),
-      { usedTokens: 12, maxTokens: 1000 },
+      { usedTokens: 12, maxTokens: 1000, compactsAutomatically: true },
     );
   });
 
@@ -46,6 +46,19 @@ describe("parseHermesUsageUpdate", () => {
     assert.isUndefined(
       parseHermesUsageUpdate({ sessionUpdate: "usage_update", size: 100, used: -1 }),
     );
+  });
+
+  it("marks Hermes as compacting automatically", () => {
+    // Asserted, not read from the wire: `UsageUpdate` carries only
+    // size/used, and this flag is what makes the context popover say so.
+    // The threshold stays absent because Hermes does not send it.
+    const usage = parseHermesUsageUpdate({
+      sessionUpdate: "usage_update",
+      size: 128000,
+      used: 1,
+    });
+    assert.isTrue(usage?.compactsAutomatically);
+    assert.isUndefined(usage?.autoCompactThreshold);
   });
 
   it("ignores unrelated updates", () => {
