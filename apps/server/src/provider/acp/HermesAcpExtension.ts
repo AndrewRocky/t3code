@@ -82,6 +82,18 @@ function hermesMeta(update: { readonly _meta?: unknown }): Record<string, unknow
  * `usedTokens` and `maxTokens` are populated. `maxTokens` is dropped when it
  * is zero — `ThreadTokenUsageSnapshot.maxTokens` is a positive int, and a
  * provider with an unknown context length reports `0`.
+ *
+ * `compactsAutomatically` is asserted rather than read, because it is a fact
+ * about the agent and not a field on the wire. Compression is the behaviour
+ * Hermes is built around: `context_compressor` runs on its own threshold and
+ * rotates the internal session id mid-turn when it fires, which is what
+ * `_meta.hermes.sessionProvenance` exists to explain. Setting the flag is
+ * what puts "Context … compacts automatically when needed." in the context
+ * popover (`apps/web/src/components/chat/ContextWindowMeter.tsx`); without it
+ * the panel says nothing about the one thing most worth knowing.
+ * `autoCompactThreshold` stays absent deliberately — Hermes knows the number
+ * (`/context` reports the distance to it) but `UsageUpdate` does not carry it,
+ * and a guessed threshold would render as a precise claim.
  */
 export function parseHermesUsageUpdate(
   update: SessionUpdate,
@@ -96,6 +108,7 @@ export function parseHermesUsageUpdate(
   const maxTokens = nonNegativeInt(update.size);
   return {
     usedTokens,
+    compactsAutomatically: true,
     ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
   };
 }
