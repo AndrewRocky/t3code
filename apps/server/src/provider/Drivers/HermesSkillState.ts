@@ -71,7 +71,18 @@ const HERMES_SKILLS_LIST_TIMEOUT_MS = 20_000;
 const ELLIPSIS = "…";
 
 export interface HermesSkillListingRow {
+  /**
+   * The `Name` cell verbatim, with any trailing ellipsis stripped. When
+   * {@link nameIsTruncated} is set this is a *prefix* of the real name, not
+   * the name.
+   */
   readonly name: string;
+  /**
+   * Rich ellipsized this cell, so `name` is only a prefix.
+   * {@link annotateHermesSkillsWithEnableState} resolves it against the scan
+   * and refuses the whole listing if it cannot do so unambiguously.
+   */
+  readonly nameIsTruncated: boolean;
   readonly category: string | undefined;
   readonly source: string | undefined;
   readonly trust: string | undefined;
@@ -80,23 +91,24 @@ export interface HermesSkillListingRow {
 /**
  * Parse the body rows of `hermes skills list --enabled-only`.
  *
- * Returns `undefined` — meaning "fail open, trust nothing here" — when the
- * output contains an ellipsis (a cell was truncated, so names are unreliable)
- * or when no row parsed at all while the output was plainly non-empty. An
- * empty skills tree legitimately produces zero rows, so the caller
- * distinguishes "no rows" from "could not read" by the exit code, not by this
- * function alone.
+ * Body rows are delimited by `│` while the `box.HEAVY_HEAD` header uses `┃`,
+ * so the header, the title line, the box rules and the trailing summary line
+ * all fall away without needing to be recognised.
+ *
+ * A cell Rich ellipsized yields a row flagged {@link
+ * HermesSkillListingRow.nameIsTruncated}; resolving that against real skill
+ * names is the caller's job, because only the caller knows them. A wrapped
+ * continuation line has an empty first cell and is skipped, which is also
+ * what drops a name whose *entire* cell wrapped away.
+ *
+ * An empty result is legitimate — a profile with no enabled skills — so this
+ * never reports failure on its own; the caller distinguishes "nothing
+ * enabled" from "could not read" using the exit code and the scan.
  *
  * Exported for tests: the table shape is the fragile part of this module and
  * is far cheaper to assert on with captured fixtures than through a spawn.
  */
-export function parseHermesSkillsListTable(
-  stdout: string,
-): ReadonlyArray<HermesSkillListingRow> | undefined {
-  if (stdout.includes(ELLIPSIS)) {
-    return undefined;
-  }
-
+export function parseHermesSkillsListTable(stdout: string): ReadonlyArray<HermesSkillListingRow> {
   const rows: Array<HermesSkillListingRow> = [];
   for (const rawLine of stdout.split("\n")) {
     const line = rawLine.trim();
@@ -108,12 +120,18 @@ export function parseHermesSkillsListTable(
     if (cells.length !== 7) {
       continue;
     }
-    const [, name, category, source, trust] = cells.map((cell) => cell.trim());
-    if (!name || name === "Name") {
+    const [, rawName, category, source, trust] = cells.map((cell) => cell.trim());
+    if (!rawName || rawName === "Name") {
+      continue;
+    }
+    const nameIsTruncated = rawName.endsWith(ELLIPSIS);
+    const name = nameIsTruncated ? rawName.slice(0, -ELLIPSIS.length).trim() : rawName;
+    if (!name) {
       continue;
     }
     rows.push({
       name,
+      nameIsTruncated,
       category: category || undefined,
       source: source || undefined,
       trust: trust || undefined,
@@ -126,13 +144,30 @@ export function parseHermesSkillsListTable(
 /**
  * Build the environment for the listing spawn.
  *
- * `COLUMNS` is the load-bearing one (see the module doc). `NO_COLOR` and a
- * dumb `TERM` are belt-and-braces: Rich already drops styling for a
- * non-terminal stdout, but a future Hermes that forces colour, or a user with
- * `FORCE_COLOR` exported in their shell, would otherwise reach the parser as
- * ANSI-wrapped cells. The caller's environment is spread first so a
- * per-instance variable configured in Settings still wins over the process
- * environment, and only these presentation keys are imposed.
+ * `COLUMNS` is the load-bearing one: Rich falls back to 80 columns when it
+ * cannot see a terminal, and at 80 columns a long skill name is
+ * ellipsis-truncated.
+ *
+ * **The other keys must be chosen carefully, because two of the obvious ones
+ * silently defeat `COLUMNS`.** Rich resolves width in `Console.size`, which
+ * returns a hardcoded `(80, 25)` for a *dumb* terminal **before** it reads
+ * `COLUMNS` at all. `is_dumb_terminal` is `is_terminal and TERM in ("dumb",
+ * "unknown")`, and `is_terminal` treats `FORCE_COLOR` as presence-based —
+ * `force_color != ""`, so even `FORCE_COLOR=0` reads as *yes, a terminal*. So
+ * `TERM=dumb` plus `FORCE_COLOR=0`, which look like belt-and-braces ways to
+ * suppress styling, together pin the width back to 80 and truncate every long
+ * name. Both are therefore **removed** from the child environment rather than
+ * set, which also clears an inherited `FORCE_COLOR=1` from the user's shell.
+ *
+ * What remains is safe and sufficient: `NO_COLOR` suppresses styling without
+ * touching width, and `TTY_COMPATIBLE=0` states outright that stdout is not a
+ * terminal — Rich checks it ahead of `FORCE_COLOR`, and a Rich too old to know
+ * the variable ignores it harmlessly, by which point nothing is claiming to be
+ * a terminal anyway.
+ *
+ * The caller's environment is spread first so a per-instance variable
+ * configured in Settings still wins over the process environment, except for
+ * the presentation keys this function owns.
  *
  * **`HERMES_PLATFORM` is deliberately not set**, here or on the `hermes acp`
  * spawn. It looks like a host-OS selector and is not: it names a gateway
@@ -152,13 +187,17 @@ export function parseHermesSkillsListTable(
 export function buildHermesSkillsListEnvironment(
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
-  return {
+  const listingEnvironment: NodeJS.ProcessEnv = {
     ...environment,
     COLUMNS: HERMES_SKILLS_LIST_COLUMNS,
     NO_COLOR: "1",
-    TERM: "dumb",
-    FORCE_COLOR: "0",
+    TTY_COMPATIBLE: "0",
   };
+  // Presence alone is enough to make Rich claim a terminal and pin the width
+  // to 80, so these are deleted rather than overridden.
+  delete listingEnvironment.FORCE_COLOR;
+  delete listingEnvironment.TERM;
+  return listingEnvironment;
 }
 
 /**
@@ -215,19 +254,13 @@ export const discoverHermesEnabledSkillNames = Effect.fn("discoverHermesEnabledS
       return undefined;
     }
 
-    const rows = parseHermesSkillsListTable(output.stdout);
-    if (rows === undefined) {
-      yield* Effect.logWarning(
-        "Could not parse `hermes skills list --enabled-only` output; treating every discovered skill as enabled.",
-      );
-      return undefined;
-    }
-    return rows;
+    return parseHermesSkillsListTable(output.stdout);
   },
 );
 
 /**
- * Apply a listing to the scan's results.
+ * Apply a listing to the scan's results, or return `undefined` when it cannot
+ * be applied and the caller should leave every discovered skill enabled.
  *
  * A scanned skill the listing names stays `enabled` and picks up the
  * listing's `category` as its scope hint when the scan had none; one the
@@ -237,28 +270,51 @@ export const discoverHermesEnabledSkillNames = Effect.fn("discoverHermesEnabledS
  * `apps/web/src/providerSkillSearch.ts`) while the entry stays in the
  * snapshot for anything that wants to show installed-but-inactive skills.
  *
- * Two fail-open guards, in order of likelihood:
+ * **Truncated names are resolved by unique prefix.** Rich may ellipsize the
+ * `Name` cell despite the pinned width, and a prefix that matches exactly one
+ * scanned skill identifies it as surely as the full name would. A prefix
+ * matching none, or more than one, is refused outright — guessing there could
+ * disable a skill the user has installed and working, which is the one outcome
+ * worth failing open to avoid.
  *
- * - `rows === undefined` — the listing could not be read. Return the scan
- *   untouched.
- * - `rows` is empty while the scan found skills. Hermes reporting zero
- *   enabled skills for a non-empty tree is possible (everything disabled) but
- *   is indistinguishable from a renderer change that broke the parser, and the
- *   two differ enormously in cost: the first is a cosmetic over-report, the
- *   second empties the picker. Treat it as unreadable.
+ * Three fail-open cases in total, in order of likelihood:
+ *
+ * - `rows === undefined` — the listing could not be read at all.
+ * - `rows` is empty while the scan found skills. Hermes reporting zero enabled
+ *   skills for a non-empty tree is possible (everything disabled) but is
+ *   indistinguishable from a renderer change that broke the parser, and the two
+ *   differ enormously in cost: the first is a cosmetic over-report, the second
+ *   empties the picker.
+ * - a truncated name cannot be resolved unambiguously.
  */
 export function annotateHermesSkillsWithEnableState(
   skills: ReadonlyArray<ServerProviderSkill>,
   rows: ReadonlyArray<HermesSkillListingRow> | undefined,
-): ReadonlyArray<ServerProviderSkill> {
+): ReadonlyArray<ServerProviderSkill> | undefined {
   if (rows === undefined) {
-    return skills;
+    return undefined;
   }
-  if (rows.length === 0 && skills.length > 0) {
-    return skills;
+  if (rows.length === 0) {
+    return skills.length === 0 ? skills : undefined;
   }
 
-  const byName = new Map(rows.map((row) => [row.name, row] as const));
+  const byName = new Map<string, HermesSkillListingRow>();
+  for (const row of rows) {
+    if (row.nameIsTruncated) {
+      const candidates = skills.filter((skill) => skill.name.startsWith(row.name));
+      if (candidates.length !== 1) {
+        return undefined;
+      }
+      const resolved = candidates[0];
+      if (resolved === undefined) {
+        return undefined;
+      }
+      byName.set(resolved.name, row);
+      continue;
+    }
+    byName.set(row.name, row);
+  }
+
   return skills.map((skill) => {
     const row = byName.get(skill.name);
     if (row === undefined) {
