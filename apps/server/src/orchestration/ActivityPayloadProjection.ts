@@ -479,6 +479,14 @@ export function projectActivityPayload(
     projectedData.toolName = data.toolName;
   }
 
+  // Scope of a search row, for an adapter that knows its agent well enough to
+  // tell a workspace grep from a web lookup. The canonical item type cannot:
+  // it has one `web_search` for both. Unlisted `data` keys are dropped here,
+  // so this passthrough is what lets the marker reach a client at all.
+  if ("searchScope" in data) {
+    projectedData.searchScope = data.searchScope;
+  }
+
   const rawOutput =
     projectRawOutput(data.rawOutput) ??
     projectAcpContent(data.content) ??

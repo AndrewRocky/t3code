@@ -92,6 +92,37 @@ describe("Hermes tool calls end to end", () => {
     expect(data.rawOutput).toEqual({ content: "terminal result", text: block });
   });
 
+  it("carries the workspace-search scope through the egress projection", () => {
+    // `projectActivityPayload` rebuilds `data` from a whitelist — an unlisted
+    // key never reaches a client — so the passthrough is as load-bearing as
+    // the augmenter itself.
+    const completed = projectedPayload({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-search-e2e",
+      title: "search: direct",
+      kind: "search",
+      status: "completed",
+      content: [textContent("File search results\nFound 50 files; showing 20.")],
+    });
+
+    expect(completed.itemType).toBe("web_search");
+    expect((completed.data as Record<string, unknown>).searchScope).toBe("workspace");
+  });
+
+  it("does not scope Hermes' own web search, which arrives as kind fetch", () => {
+    const completed = projectedPayload({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-websearch-e2e",
+      title: "web search: effect-ts Layer composition",
+      kind: "fetch",
+      status: "completed",
+      content: [textContent("web search results")],
+    });
+
+    expect(completed.itemType).toBe("web_search");
+    expect((completed.data as Record<string, unknown>).searchScope).toBeUndefined();
+  });
+
   it("leaves a Cursor- or Grok-shaped tool call byte-identical with and without the augmenter", () => {
     const update = {
       sessionUpdate: "tool_call",
