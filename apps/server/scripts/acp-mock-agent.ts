@@ -72,6 +72,13 @@ const hermesMode = process.env.T3_ACP_HERMES === "1";
 const hermesPermissionOptions = process.env.T3_ACP_HERMES_PERMISSION_OPTIONS === "1";
 // The three notifications the shared ACP runtime model does not parse.
 const emitHermesMetadata = process.env.T3_ACP_EMIT_HERMES_METADATA === "1";
+// A `delegate_task` fan-out, exactly as `hermes-agent@0.21.3` puts one on the
+// wire: an `execute` tool call titled `delegate_task: …`, whose completion
+// arrives within milliseconds carrying a background dispatch handle rather
+// than any child result. `"hang"` leaves the prompt open afterwards so a test
+// can settle the turn through cancel, steer or disconnect instead of
+// `end_turn`.
+const hermesDelegation = process.env.T3_ACP_HERMES_DELEGATION;
 const modeLogPath = process.env.T3_ACP_MODE_LOG_PATH;
 const permissionRequestCount = Math.max(
   1,
@@ -752,6 +759,71 @@ const program = Effect.gen(function* () {
             ],
           },
         });
+      }
+
+      if (hermesDelegation === "1" || hermesDelegation === "hang") {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "tc-delegate-1",
+            title:
+              "delegate_task: 2 tasks: Audit the auth middleware for timi | Benchmark the cold-start path",
+            kind: "execute",
+            content: [
+              {
+                type: "content",
+                content: {
+                  type: "text",
+                  text: "Delegating 2 tasks\n\n1. Audit the auth middleware for timing leaks\n2. Benchmark the cold-start path",
+                },
+              },
+            ],
+          },
+        });
+        // `_tool_result_failed` sees no `success: false`, no `error` and no
+        // non-zero `exit_code` in a dispatch handle, so upstream reports the
+        // launch as `completed` while both children are still running.
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tc-delegate-1",
+            kind: "execute",
+            status: "completed",
+            content: [
+              {
+                type: "content",
+                content: {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "dispatched",
+                    mode: "background",
+                    count: 2,
+                    delegation_id: "deleg_7c1a9e33",
+                    goals: [
+                      "Audit the auth middleware for timing leaks",
+                      "Benchmark the cold-start path",
+                    ],
+                    subagent_ids: ["sa-0-1a2b3c4d", "sa-1-5e6f7a8b"],
+                    note: "2 subagents are running in parallel in the background. Results are delivered only after you END YOUR TURN.",
+                  }),
+                },
+              },
+            ],
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "I'll summarize when they report back." },
+          },
+        });
+        if (hermesDelegation === "hang") {
+          return yield* Effect.never;
+        }
+        return { stopReason: "end_turn" };
       }
 
       if (Number.isFinite(promptDelayMs) && promptDelayMs > 0) {

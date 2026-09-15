@@ -49,6 +49,8 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   RuntimeRequestId,
+  RuntimeTaskId,
+  type RuntimeTaskStatus,
   type ServerProviderSkill,
   type ThreadId,
   TurnId,
@@ -90,7 +92,7 @@ import {
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
-import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
+import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   HERMES_EXTENSION_SOURCE,
@@ -106,6 +108,10 @@ import {
   makeHermesAcpRuntime,
   resolveHermesAcpBaseModelId,
 } from "../acp/HermesAcpSupport.ts";
+import {
+  type HermesDelegationMarker,
+  hermesDelegationMarkerOf,
+} from "../acp/HermesSubagentProtocol.ts";
 import { syncHermesCommandRules } from "../Drivers/HermesCommandRules.ts";
 import { applyHermesSkillDirective } from "../Drivers/HermesSkillDirective.ts";
 import { discoverHermesSkills } from "../Drivers/HermesSkills.ts";
@@ -149,6 +155,37 @@ const DEFAULT_HERMES_TURN_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1_000;
  */
 const DEFAULT_HERMES_ACTIVE_TOOL_INACTIVITY_TIMEOUT_MS = 30 * 60 * 1_000;
 
+/**
+ * Environment variable that turns on raw ACP frame logging for Hermes.
+ *
+ * `makeAcpNativeLoggers` installs only its summarizing request logger unless
+ * `verboseProtocolLogging` is set, and that summary carries method, status and
+ * field counts — not `sessionId`, not the update body. Without this, a
+ * `session/update` that the adapter drops (a notification arriving after the
+ * turn settled, say) leaves no trace anywhere, which makes an entire class of
+ * "Hermes went quiet" report undiagnosable from logs alone.
+ *
+ * Opt-in and off by default because the frames are verbose and carry agent
+ * output verbatim. Matched exactly against `"1"`, mirroring how Hermes reads
+ * its own ACP env flags (`HERMES_ACP_SKIP_CONFIGURED_MCP`).
+ */
+const HERMES_ACP_PROTOCOL_LOG_ENV = "T3_HERMES_ACP_PROTOCOL_LOG";
+
+/**
+ * Description a delegation row carries once its parent turn has ended.
+ *
+ * Deliberately explicit rather than reassuring. Over ACP a top-level
+ * `delegate_task` detaches: `acp_adapter/server.py` leaves `async_delivery`
+ * at its default, so `_dispatch_background` hands the model a dispatch handle,
+ * the children run on daemon threads, and their consolidated result is pushed
+ * onto `process_registry.completion_queue` — which nothing in `acp_adapter/`
+ * ever drains. The model is told, verbatim, that results arrive after it ends
+ * its turn; they do not, on this transport. Saying so is the difference
+ * between a known limitation and a thread that silently stops.
+ */
+const HERMES_DELEGATION_IDLE_DESCRIPTION =
+  "Turn ended. Hermes keeps delegated tasks running in its own background queue, and does not report their results back to this session.";
+
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
   return Exit.isSuccess(result) ? result.value : undefined;
@@ -173,6 +210,44 @@ interface HermesTurnLivenessSignal {
   readonly turnId: TurnId;
 }
 
+/**
+ * A `delegate_task` fan-out this session has opened and not yet settled.
+ *
+ * Keyed by ACP tool-call id, and kept as a bare `"finished"` sentinel after
+ * settlement rather than deleted, because the shared runtime drops a tool call
+ * from its own map the moment it reports `completed`
+ * (`AcpSessionRuntime.handleSessionUpdate`). A later frame for the same id
+ * therefore arrives unmerged, with no title and no augmenter marker, and
+ * without a sticky record here it would either be misread as a fresh
+ * delegation or re-open a row that has already been settled.
+ */
+interface HermesOpenDelegation {
+  readonly turnId: TurnId | undefined;
+  readonly status: "pending" | "running";
+  readonly description: string;
+  /** Whether `task.started` has already been emitted for this row. */
+  readonly started: boolean;
+}
+
+/**
+ * Linkage repeated on every row of one delegation.
+ *
+ * `taskType` is a free-form string the server classifies at ingestion:
+ * `classifyTaskAgentKind` denylists monitor and inert types, so anything else
+ * — including `"subagent_batch"` — is stamped `agentKind: "agent"` and joins
+ * the Agents roster. `"subagent_batch"` specifically also picks up the
+ * client's existing batch affordances: the "Idle" label instead of a status
+ * verb, and the batch counting in the work log's spawn row.
+ */
+function hermesDelegationLinkage(toolCallId: string) {
+  return {
+    taskId: RuntimeTaskId.make(toolCallId),
+    taskType: "subagent_batch",
+    toolUseId: toolCallId,
+    title: "Hermes delegated tasks",
+  } as const;
+}
+
 interface HermesSessionContext {
   readonly threadId: ThreadId;
   readonly acpSessionId: string;
@@ -186,8 +261,20 @@ interface HermesSessionContext {
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
+  /**
+   * Turn that settled most recently.
+   *
+   * `activeTurnId` is cleared as part of settlement, and the notification
+   * fiber drops anything that arrives with no active turn. That is right for
+   * ordinary content — a late assistant chunk belongs to nothing — but a
+   * delegation outlives its parent turn by design, so its rows need a turn to
+   * hang off after settlement. Only the delegation path reads this.
+   */
+  lastSettledTurnId: TurnId | undefined;
   /** Turns already interrupted; late prompt RPCs must not resurrect them. */
   interruptedTurnIds: Set<TurnId>;
+  /** Open `delegate_task` fan-outs by ACP tool-call id; see {@link HermesOpenDelegation}. */
+  readonly delegations: Map<string, HermesOpenDelegation | "finished">;
   /**
    * Number of sendTurn prompts currently in flight or being prepared. >0 means
    * a turn is actively running, so a new sendTurn is a steer that continues it
@@ -447,6 +534,8 @@ export function makeHermesAdapter(
     const managedNativeEventLogger =
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
     const makeAcpNativeLoggers = yield* makeAcpNativeLoggerFactory();
+    const verboseProtocolLogging =
+      (options?.environment ?? process.env)[HERMES_ACP_PROTOCOL_LOG_ENV] === "1";
 
     const sessions = new Map<ThreadId, HermesSessionContext>();
     const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
@@ -515,6 +604,150 @@ export function makeHermesAdapter(
 
     const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
       Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
+
+    // ── Delegated subagents ──────────────────────────────────────────
+
+    /**
+     * Whether this tool call is, or has already been recognised as, a
+     * `delegate_task` fan-out.
+     *
+     * The sticky map is consulted first so a post-completion frame — which
+     * arrives with no title and no augmenter marker, because the shared
+     * runtime has already forgotten the call — still resolves to the row it
+     * belongs to.
+     */
+    const hermesDelegationOf = (
+      ctx: HermesSessionContext,
+      toolCall: AcpToolCallState,
+    ):
+      | {
+          readonly tracked: HermesOpenDelegation | "finished" | undefined;
+          readonly marker: HermesDelegationMarker | undefined;
+        }
+      | undefined => {
+      const tracked = ctx.delegations.get(toolCall.toolCallId);
+      const marker = hermesDelegationMarkerOf(toolCall);
+      if (tracked === undefined && marker === undefined) return undefined;
+      return { tracked, marker };
+    };
+
+    /**
+     * Emit the lifecycle for one frame of a delegation.
+     *
+     * Hermes' launch tool call reports `completed` within milliseconds — it
+     * returns a dispatch handle, not a child result — so a terminal ACP status
+     * is explicitly *not* treated as the batch finishing. Only `failed` is a
+     * real terminal signal; everything else holds the row open until the turn
+     * settles it, which is the same conclusion the Antigravity driver reached
+     * for `start_subagent`.
+     */
+    const emitHermesDelegationFrame = Effect.fn("HermesAdapter.emitHermesDelegationFrame")(
+      function* (
+        ctx: HermesSessionContext,
+        turnId: TurnId | undefined,
+        toolCall: {
+          readonly toolCallId: string;
+          readonly status?: string;
+          readonly detail?: string;
+        },
+        tracked: HermesOpenDelegation | undefined,
+      ) {
+        const linkage = hermesDelegationLinkage(toolCall.toolCallId);
+        if (toolCall.status === "failed") {
+          ctx.delegations.set(toolCall.toolCallId, "finished");
+          yield* offerRuntimeEvent({
+            type: "task.completed",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: {
+              ...linkage,
+              status: "failed",
+              ...(tracked?.description ? { summary: tracked.description } : {}),
+            },
+          });
+          return;
+        }
+        const status = toolCall.status === "pending" ? "pending" : "running";
+        const description = tracked?.description ?? toolCall.detail?.trim() ?? linkage.title;
+        // Recorded before the event is published, not after. `offerRuntimeEvent`
+        // is a yield point, and a settlement racing in on the other side of it
+        // would find no open delegation and leave a row announced but never
+        // settled.
+        ctx.delegations.set(toolCall.toolCallId, {
+          turnId,
+          status,
+          description,
+          started: true,
+        });
+        if (!tracked?.started) {
+          yield* offerRuntimeEvent({
+            type: "task.started",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: { ...linkage, description },
+          });
+          return;
+        }
+        // Dedup guard: ACP tool-call updates are chatty, and ingestion
+        // collapses task.progress onto one row per task anyway, so an
+        // unchanged repeat buys nothing.
+        if (tracked.status === status && tracked.description === description) {
+          return;
+        }
+        yield* offerRuntimeEvent({
+          type: "task.progress",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          turnId,
+          payload: { ...linkage, description, status },
+        });
+      },
+    );
+
+    /**
+     * Settle every open delegation.
+     *
+     * Called from each place a turn or session reaches a terminal state, so a
+     * row can never outlive the thing that opened it. `idle` is the normal
+     * outcome and is deliberately not `completed`: the children are still
+     * running inside Hermes, we simply stop hearing about them, and claiming
+     * success would be a lie. The client treats `idle` as non-terminal and
+     * renders it as "Idle" rather than a check mark.
+     */
+    const finishHermesDelegations = (
+      ctx: HermesSessionContext,
+      status: Extract<RuntimeTaskStatus, "cancelled" | "failed" | "idle">,
+      error?: string,
+    ) =>
+      Effect.gen(function* () {
+        for (const [toolCallId, delegation] of ctx.delegations) {
+          if (delegation === "finished") continue;
+          yield* offerRuntimeEvent({
+            type: "task.updated",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: delegation.turnId,
+            payload: {
+              ...hermesDelegationLinkage(toolCallId),
+              status,
+              ...(status === "idle"
+                ? {
+                    description: HERMES_DELEGATION_IDLE_DESCRIPTION,
+                    timelineBypass: true,
+                  }
+                : {}),
+              ...(error ? { error } : {}),
+            },
+          });
+          ctx.delegations.set(toolCallId, "finished");
+        }
+      });
 
     // ── Turn liveness ────────────────────────────────────────────────
 
@@ -723,6 +956,16 @@ export function makeHermesAdapter(
           }
           return;
         }
+        // Whatever ends the turn ends the delegation rows with it: `idle` is
+        // the honest default (the children keep running inside Hermes, we
+        // just stop hearing about them), and a cancel or a failure carries
+        // through as itself.
+        const delegationOutcome: Extract<RuntimeTaskStatus, "cancelled" | "failed" | "idle"> =
+          settleOptions?.errorMessage !== undefined
+            ? "failed"
+            : settleOptions?.completedStopReason === "cancelled"
+              ? "cancelled"
+              : "idle";
         let settleTurnId = turnId;
         if (settleOptions?.settleAllPrompts) {
           liveCtx.promptsInFlight = 0;
@@ -732,6 +975,7 @@ export function makeHermesAdapter(
               if (liveCtx.session.status === "running" || liveCtx.session.status === "connecting") {
                 const updatedAt = yield* nowIso;
                 const { activeTurnId: _activeTurnId, ...readySession } = liveCtx.session;
+                liveCtx.lastSettledTurnId = liveCtx.activeTurnId ?? liveCtx.lastSettledTurnId;
                 liveCtx.activeTurnId = undefined;
                 liveCtx.session = {
                   ...readySession,
@@ -739,6 +983,11 @@ export function makeHermesAdapter(
                   updatedAt,
                 };
               }
+              yield* finishHermesDelegations(
+                liveCtx,
+                delegationOutcome,
+                settleOptions?.errorMessage,
+              );
               yield* clearTurnLiveness(liveCtx);
               return;
             }
@@ -756,6 +1005,7 @@ export function makeHermesAdapter(
           }
           liveCtx.promptsInFlight = remainingPrompts;
         }
+        yield* finishHermesDelegations(liveCtx, delegationOutcome, settleOptions?.errorMessage);
         yield* clearTurnLiveness(liveCtx);
         const updatedAt = yield* nowIso;
         const canEmitTurnCompletion =
@@ -765,6 +1015,7 @@ export function makeHermesAdapter(
         const shouldEmitCompletedTurn =
           settleOptions?.completedStopReason !== undefined && canEmitTurnCompletion;
         const { activeTurnId: _activeTurnId, ...readySession } = liveCtx.session;
+        liveCtx.lastSettledTurnId = settleTurnId;
         liveCtx.activeTurnId = undefined;
         liveCtx.session = {
           ...readySession,
@@ -1074,6 +1325,8 @@ export function makeHermesAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
+        yield* finishHermesDelegations(ctx, "cancelled");
+        ctx.delegations.clear();
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
@@ -1132,6 +1385,7 @@ export function makeHermesAdapter(
             nativeEventLogger,
             provider: PROVIDER,
             threadId: input.threadId,
+            ...(verboseProtocolLogging ? { verboseProtocolLogging: true } : {}),
           });
 
           // Best-effort: an unwritable or malformed config.yaml logs a
@@ -1341,7 +1595,9 @@ export function makeHermesAdapter(
             turns: [],
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
+            lastSettledTurnId: undefined,
             interruptedTurnIds: new Set(),
+            delegations: new Map(),
             promptsInFlight: 0,
             livenessSignals: yield* Queue.sliding<HermesTurnLivenessSignal>(1),
             livenessTurnId: undefined,
@@ -1385,10 +1641,42 @@ export function makeHermesAdapter(
                 }
 
                 const notificationTurnId = resolveNotificationTurnId(ctx);
+                // A delegation is the one thing that stays meaningful after
+                // its parent turn has settled: Hermes' launch tool call
+                // completes in milliseconds while the children keep running,
+                // so the frames that say what became of them arrive late by
+                // construction. Every other event keeps the original gate
+                // exactly — a stray assistant chunk with no live turn still
+                // belongs to nothing and is still dropped.
+                const delegationToolCall =
+                  event._tag === "ToolCallUpdated" ? event.toolCall : undefined;
+                const delegationMatch =
+                  delegationToolCall === undefined
+                    ? undefined
+                    : hermesDelegationOf(ctx, delegationToolCall);
+                const delegation =
+                  delegationToolCall !== undefined && delegationMatch !== undefined
+                    ? { ...delegationMatch, toolCall: delegationToolCall }
+                    : undefined;
                 if (
                   notificationTurnId === undefined ||
                   ctx.interruptedTurnIds.has(notificationTurnId)
                 ) {
+                  const settledTurnId = notificationTurnId ?? ctx.lastSettledTurnId;
+                  if (
+                    delegation === undefined ||
+                    delegation.tracked === "finished" ||
+                    settledTurnId === undefined ||
+                    ctx.interruptedTurnIds.has(settledTurnId)
+                  ) {
+                    return;
+                  }
+                  yield* emitHermesDelegationFrame(
+                    ctx,
+                    delegation.tracked?.turnId ?? settledTurnId,
+                    delegation.toolCall,
+                    delegation.tracked,
+                  );
                   return;
                 }
                 if (
@@ -1438,6 +1726,22 @@ export function makeHermesAdapter(
                     );
                     return;
                   case "ToolCallUpdated":
+                    // A delegation becomes an Agents-surface row instead of a
+                    // work-log row. Emitting both would show the same fan-out
+                    // twice, once mislabelled: its ACP kind is `execute`, so
+                    // the generic path renders it as "Ran command".
+                    if (delegation !== undefined) {
+                      if (delegation.tracked === "finished") {
+                        return;
+                      }
+                      yield* emitHermesDelegationFrame(
+                        ctx,
+                        delegation.tracked?.turnId ?? notificationTurnId,
+                        delegation.toolCall,
+                        delegation.tracked,
+                      );
+                      return;
+                    }
                     yield* offerRuntimeEvent(
                       makeAcpToolCallEvent({
                         stamp,
@@ -1808,6 +2112,7 @@ export function makeHermesAdapter(
                 }
                 const completedAt = yield* nowIso;
                 const { activeTurnId: _completedTurnId, ...readySession } = ctx.session;
+                ctx.lastSettledTurnId = prepared.turnId;
                 ctx.activeTurnId = undefined;
                 ctx.session = {
                   ...readySession,
@@ -1815,6 +2120,12 @@ export function makeHermesAdapter(
                   updatedAt: completedAt,
                   ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
                 };
+                // Before the terminal event, so the Agents surface never shows
+                // a delegation still running under a turn that has ended.
+                yield* finishHermesDelegations(
+                  ctx,
+                  result.stopReason === "cancelled" ? "cancelled" : "idle",
+                );
                 yield* clearTurnLiveness(ctx);
                 yield* offerRuntimeEvent({
                   type: "turn.completed",

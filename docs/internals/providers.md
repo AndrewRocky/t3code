@@ -138,6 +138,32 @@ therefore assembled provider-side, and each choice there is a constraint worth k
   Hermes is designed not to spend, and `skill_view(preprocess=True)` already runs Hermes' own
   preprocessing.
 
+Subagents have no ACP surface either, and the shape of the workaround matters. Hermes generates a
+full `subagent.*` stream — child id, parent id, depth, model, per-child tokens and summaries, which
+its own gateway and TUI both consume — and then drops all of it at the ACP boundary, where
+`acp_adapter/events.py` returns early on every event that is not `tool.started`. A fan-out is
+therefore one ordinary `tool_call` of kind `execute`, which the generic path renders as
+"Ran command". [`HermesSubagentProtocol.ts`](../../apps/server/src/provider/acp/HermesSubagentProtocol.ts)
+recognises it instead, from a marker
+[`HermesToolCallAugment.ts`](../../apps/server/src/provider/acp/HermesToolCallAugment.ts) stamps —
+the augmenter is the last point at which the agent's own title is observable — and the adapter
+raises it to `task.*` rather than emitting the work-log row.
+
+Two properties of that tool call drive the rest of the design. Its ACP status reaches `completed`
+within milliseconds, because a top-level delegation returns a dispatch handle rather than child
+results, so a terminal status must **not** settle the row — only `failed` is a real terminal
+signal, and everything else is held open until the turn ends. And the shared runtime forgets a tool
+call the moment it completes, so identity has to be kept in the adapter's own sticky map or a later
+frame arrives unmerged, with neither title nor marker. Both conclusions match the Antigravity
+driver's, which solves the same problem for `start_subagent`.
+
+The delegation path is also the one exception to "a notification with no active turn is dropped".
+A delegation outlives its parent turn by construction, so its frames settle against
+`lastSettledTurnId`; every other event keeps the original gate. What T3 Code cannot do is deliver
+the children's results: Hermes pushes them onto an in-process completion queue that nothing in
+`acp_adapter/` drains, so the batch settles to `idle` — never `completed` — with a description
+saying so.
+
 `HERMES_PLATFORM` is left unset on every Hermes spawn. It names a gateway channel (`cli`,
 `discord`, …), not the host OS, and Hermes' own ACP adapter never sets it. An unrecognised value
 would classify the session as a human messaging surface — `NON_MESSAGING_SESSION_SURFACES` is
