@@ -702,13 +702,41 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
       yield* Deferred.await(turnCompleted);
       yield* Fiber.interrupt(eventsFiber);
 
-      const started = runtimeEvents.find((event) => event.type === "task.started");
-      assert.isDefined(started);
-      if (started?.type === "task.started") {
-        assert.equal(started.payload.taskId, "tc-delegate-1");
-        assert.equal(started.payload.taskType, "subagent_batch");
-        assert.equal(started.payload.toolUseId, "tc-delegate-1");
-        assert.equal(started.payload.title, "Hermes delegated tasks");
+      const started = runtimeEvents.filter((event) => event.type === "task.started");
+      const batch = started.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "tc-delegate-1",
+      );
+      assert.isDefined(batch);
+      if (batch?.type === "task.started") {
+        assert.equal(batch.payload.taskType, "subagent_batch");
+        assert.equal(batch.payload.toolUseId, "tc-delegate-1");
+        assert.equal(batch.payload.title, "Hermes delegated tasks");
+        // Once the dispatch handle names the tasks, the batch says what it is.
+        assert.include(batch.payload.description ?? "", "2 tasks:");
+        assert.include(batch.payload.description ?? "", "Audit the auth middleware");
+      }
+
+      // The handle's `subagent_ids` are Hermes' own child ids, and the only
+      // per-child identity it puts on the wire. They key the rows so anything
+      // that later learns more about a child addresses the same one.
+      const children = started.filter(
+        (event) => event.type === "task.started" && event.payload.taskType === "subagent",
+      );
+      assert.lengthOf(children, 2);
+      const [firstChild, secondChild] = children;
+      if (firstChild?.type === "task.started") {
+        assert.equal(firstChild.payload.taskId, "sa-0-1a2b3c4d");
+        assert.equal(firstChild.payload.title, "Audit the auth middleware for timing leaks");
+        assert.equal(firstChild.payload.toolUseId, "tc-delegate-1");
+        assert.equal(firstChild.payload.agentIndex, 0);
+        // The batch already produced the work-log spawn row; N more would
+        // bury the turn.
+        assert.isTrue(firstChild.payload.timelineBypass);
+      }
+      if (secondChild?.type === "task.started") {
+        assert.equal(secondChild.payload.taskId, "sa-1-5e6f7a8b");
+        assert.equal(secondChild.payload.title, "Benchmark the cold-start path");
+        assert.equal(secondChild.payload.agentIndex, 1);
       }
 
       // The launch tool call reports `completed` in milliseconds — it returns
@@ -718,14 +746,16 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
       assert.lengthOf(completed, 0);
 
       const updated = runtimeEvents.filter((event) => event.type === "task.updated");
-      assert.lengthOf(updated, 1);
+      assert.lengthOf(updated, 3);
+      for (const event of updated) {
+        if (event.type !== "task.updated") continue;
+        assert.equal(event.payload.status, "idle");
+        assert.include(event.payload.description ?? "", "background queue");
+      }
       const settled = updated[0];
-      assert.isDefined(settled);
       if (settled?.type === "task.updated") {
         assert.equal(settled.payload.taskId, "tc-delegate-1");
-        assert.equal(settled.payload.status, "idle");
         assert.isTrue(settled.payload.timelineBypass);
-        assert.include(settled.payload.description ?? "", "background queue");
       }
 
       // Emitting the work-log row too would show the same fan-out twice, and
@@ -777,11 +807,11 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
       yield* Fiber.await(turnFiber);
       yield* Fiber.interrupt(eventsFiber);
 
-      const updated = runtimeEvents.filter((event) => event.type === "task.updated");
-      assert.isAtLeast(updated.length, 1);
-      const settled = updated.at(-1);
+      const settled = runtimeEvents.find(
+        (event) => event.type === "task.updated" && event.payload.taskId === "tc-delegate-1",
+      );
+      assert.isDefined(settled);
       if (settled?.type === "task.updated") {
-        assert.equal(settled.payload.taskId, "tc-delegate-1");
         assert.equal(settled.payload.status, "cancelled");
         // Cancelled is a real outcome, so it carries no "we lost track" copy.
         assert.isUndefined(settled.payload.timelineBypass);
