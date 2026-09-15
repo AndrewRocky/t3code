@@ -113,6 +113,37 @@ describe("hermesToolCallAugment", () => {
     }
   });
 
+  it("scopes a workspace search so the work log cannot call it a web search", () => {
+    // Upstream `TOOL_KIND_MAP` sends exactly one tool to `search` (the
+    // filesystem search) and every web tool to `fetch`, so within Hermes the
+    // kind is decisive. It is not decisive for ACP at large, which is why the
+    // inference lives in this per-agent augmenter.
+    const search = parseHermesToolCall({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-search",
+      title: "search: direct",
+      kind: "search",
+    });
+
+    expect(search.data.searchScope).toBe("workspace");
+    // The canonical classification is unchanged; only the scope is new.
+    expect(search.title).toBe("Searched files");
+    expect(search.detail).toBe("search: direct");
+  });
+
+  it("leaves every non-search kind unscoped, Hermes' own web search included", () => {
+    for (const kind of ["fetch", "read", "edit", "execute", "other"]) {
+      const toolCall = parseHermesToolCall({
+        sessionUpdate: "tool_call",
+        toolCallId: `tc-${kind}`,
+        title: `web search: effect-ts Layer composition`,
+        kind,
+      } as EffectAcpSchema.SessionNotification["update"]);
+
+      expect(toolCall.data.searchScope).toBeUndefined();
+    }
+  });
+
   it("prefers a path read out of locations over the title for a file read", () => {
     const toolCall = parseHermesToolCall({
       sessionUpdate: "tool_call",

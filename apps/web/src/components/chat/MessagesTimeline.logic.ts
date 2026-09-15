@@ -270,10 +270,13 @@ type ToolGroupAction = "read" | "edit" | "command" | "code-search" | "search" | 
 type ToolGroupSummaryKind = ToolGroupAction | "dynamic-tool" | "agent-tool" | "tone-tool" | "mixed";
 
 export function workLogEntryIsLocalCodeSearch(entry: WorkLogEntry): boolean {
-  return (
-    entry.itemType === "web_search" &&
-    /\bgrep\b/i.test(normalizeCompactToolLabel(entry.toolTitle ?? entry.label))
-  );
+  if (entry.itemType !== "web_search") return false;
+  // ACP has no canonical item type for a local search, so `search` and `fetch`
+  // both arrive as `web_search`. An adapter that can tell them apart for its
+  // own agent says so here; the ACP kind alone cannot, since the protocol
+  // leaves `search` scope-neutral and at least one agent uses it for the web.
+  if (entry.searchScope !== undefined) return entry.searchScope === "workspace";
+  return /\bgrep\b/i.test(normalizeCompactToolLabel(entry.toolTitle ?? entry.label));
 }
 
 export function toolGroupAction(entry: WorkLogEntry): ToolGroupAction {

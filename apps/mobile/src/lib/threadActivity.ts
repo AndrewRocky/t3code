@@ -93,6 +93,12 @@ export interface WorkLogEntry {
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
+  /**
+   * Scope of a search row, when the provider adapter knew it. `"workspace"`
+   * means local files rather than the network; ACP's canonical item type
+   * cannot express the difference.
+   */
+  searchScope?: string;
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
@@ -468,6 +474,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (itemType) {
     entry.itemType = itemType;
   }
+  const searchScope = asTrimmedString(asRecord(payload?.data)?.searchScope);
+  if (searchScope) {
+    entry.searchScope = searchScope;
+  }
   if (requestKind) {
     entry.requestKind = requestKind;
   }
@@ -593,6 +603,7 @@ function mergeDerivedWorkLogEntries(
   const rawCommand = next.rawCommand ?? previous.rawCommand;
   const toolTitle = next.toolTitle ?? previous.toolTitle;
   const itemType = next.itemType ?? previous.itemType;
+  const searchScope = next.searchScope ?? previous.searchScope;
   const requestKind = next.requestKind ?? previous.requestKind;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
@@ -609,6 +620,7 @@ function mergeDerivedWorkLogEntries(
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(itemType ? { itemType } : {}),
+    ...(searchScope ? { searchScope } : {}),
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolLifecycleStatus ? { toolLifecycleStatus } : {}),

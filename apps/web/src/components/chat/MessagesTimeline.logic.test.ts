@@ -69,6 +69,37 @@ describe("toolGroupAction", () => {
       ),
     ).toBe("read");
   });
+
+  it("counts a Hermes workspace search as a code search, not a web search", () => {
+    // Both `search` and `fetch` reach the client as `web_search`, and the
+    // agent's own title has already been replaced by the generic summary, so
+    // the adapter-set scope is the only thing left that can tell them apart.
+    const entry = workEntry({
+      id: "hermes-search",
+      itemType: "web_search",
+      toolTitle: "Searched files",
+      searchScope: "workspace",
+      detail: "search: direct",
+    });
+
+    expect(toolGroupAction(entry)).toBe("code-search");
+    expect(summarizeToolGroup([entry])).toBe("Searched code 1 time");
+    expect(summarizeToolGroup([entry, { ...entry, id: "hermes-search-2" }])).toBe(
+      "Searched code 2 times",
+    );
+  });
+
+  it("leaves a search row from a provider that scopes nothing as a web search", () => {
+    // Only an adapter that knows its own agent sets `searchScope` — today that
+    // is Hermes alone. Cursor matters in particular: cursor-agent tags its
+    // built-in *web* search with ACP `kind: "search"`, so a rule keyed on the
+    // raw kind would have relabelled a genuine web search as a code search.
+    for (const toolTitle of ["Searched files", "Web search"]) {
+      const entry = workEntry({ id: `unscoped-${toolTitle}`, itemType: "web_search", toolTitle });
+      expect(toolGroupAction(entry)).toBe("search");
+      expect(summarizeToolGroup([entry])).toBe("Searched the web 1 time");
+    }
+  });
 });
 
 describe("computeMessageDurationStart", () => {
