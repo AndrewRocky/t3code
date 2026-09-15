@@ -157,6 +157,14 @@ call the moment it completes, so identity has to be kept in the adapter's own st
 frame arrives unmerged, with neither title nor marker. Both conclusions match the Antigravity
 driver's, which solves the same problem for `start_subagent`.
 
+Per-child rows come from the background dispatch handle. `_format_delegate_result` only formats a
+payload carrying a `results` array, so for a background dispatch it returns `None` and
+`_build_tool_complete_content` falls through to the raw JSON — which carries the real
+`subagent_ids`, their `goals` and a stable `delegation_id`. Children are keyed on Hermes' own
+`sa-<index>-<hex>` ids, use `taskType: "subagent"` so the client counts them as individuals
+rather than as more batches, and set `timelineBypass` because the batch's own start row is already
+the work-log spawn row.
+
 The delegation path is also the one exception to "a notification with no active turn is dropped".
 A delegation outlives its parent turn by construction, so its frames settle against
 `lastSettledTurnId`; every other event keeps the original gate. What T3 Code cannot do is deliver

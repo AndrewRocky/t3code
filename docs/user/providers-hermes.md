@@ -89,7 +89,8 @@ carrying [agentskills.io](https://agentskills.io) frontmatter. See
 ## Delegated subtasks
 
 Hermes can split work across subagents with its `delegate_task` tool. Each
-fan-out appears as one batch in [agent work](./thread-sidebar.md#inspect-agent-work).
+fan-out appears in [agent work](./thread-sidebar.md#inspect-agent-work) as a
+batch plus one row per subtask, named after the task Hermes wrote for it.
 
 **A delegated subtask does not report back into the thread.** Hermes runs
 top-level delegations in a background queue and delivers their results through
@@ -108,5 +109,6 @@ Hermes stores its sessions in a SQLite `state.db` rather than a readable
 transcript, so it contributes nothing to the [Usage](./usage.md) page.
 Context-window telemetry still arrives live during a thread.
 
-Individual subagents inside a delegated batch cannot be opened, steered, or
-stopped from T3 Code, and their token usage is not reported.
+Individual subagents cannot be opened, steered, or stopped from T3 Code, and
+neither their progress nor their token usage is reported: Hermes names them
+when it dispatches them and says nothing further over this connection.

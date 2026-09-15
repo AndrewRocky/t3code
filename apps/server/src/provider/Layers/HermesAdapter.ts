@@ -109,6 +109,7 @@ import {
   resolveHermesAcpBaseModelId,
 } from "../acp/HermesAcpSupport.ts";
 import {
+  hermesChildLabel,
   type HermesDelegationMarker,
   hermesDelegationMarkerOf,
 } from "../acp/HermesSubagentProtocol.ts";
@@ -186,6 +187,13 @@ const HERMES_ACP_PROTOCOL_LOG_ENV = "T3_HERMES_ACP_PROTOCOL_LOG";
 const HERMES_DELEGATION_IDLE_DESCRIPTION =
   "Turn ended. Hermes keeps delegated tasks running in its own background queue, and does not report their results back to this session.";
 
+/** The same fact, told from one child's point of view. */
+const HERMES_DELEGATION_CHILD_IDLE_DESCRIPTION =
+  "Still running in Hermes' background queue. Its result does not return to this session.";
+
+/** Bound on the batch description built from the children's goals. */
+const HERMES_DELEGATION_DESCRIPTION_MAX_CHARS = 400;
+
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
   return Exit.isSuccess(result) ? result.value : undefined;
@@ -227,6 +235,18 @@ interface HermesOpenDelegation {
   readonly description: string;
   /** Whether `task.started` has already been emitted for this row. */
   readonly started: boolean;
+  /**
+   * One row per child, once the dispatch handle has named them. Empty until
+   * the delegation's terminal frame arrives, and empty forever for a
+   * synchronous delegation, which returns results rather than a handle.
+   */
+  readonly children: ReadonlyArray<HermesDelegationChildRow>;
+}
+
+interface HermesDelegationChildRow {
+  readonly taskId: string;
+  readonly label: string;
+  readonly index: number;
 }
 
 /**
@@ -245,6 +265,59 @@ function hermesDelegationLinkage(toolCallId: string) {
     taskType: "subagent_batch",
     toolUseId: toolCallId,
     title: "Hermes delegated tasks",
+  } as const;
+}
+
+/**
+ * Turn the dispatch handle's children into stable row identities.
+ *
+ * Prefers Hermes' own `sa-<index>-<hex>` id, which is what its live registry,
+ * its `delegate_task(action='list')` control plane and its transcripts all use,
+ * so anything that later learns more about a child can address the same row.
+ * Falls back to a positional id for an older release that omits the list.
+ */
+function hermesDelegationChildRows(
+  toolCallId: string,
+  marker: HermesDelegationMarker | undefined,
+): ReadonlyArray<HermesDelegationChildRow> {
+  const children = marker?.dispatch?.children ?? [];
+  return children.map((child) => ({
+    taskId: child.subagentId ?? `${toolCallId}:${child.index}`,
+    label: hermesChildLabel(child),
+    index: child.index,
+  }));
+}
+
+/** `2 tasks: audit the middleware · benchmark the cold-start path`. */
+function hermesDelegationDescription(
+  children: ReadonlyArray<HermesDelegationChildRow>,
+): string | undefined {
+  if (children.length === 0) return undefined;
+  const joined = `${children.length} task${children.length === 1 ? "" : "s"}: ${children
+    .map((child) => child.label)
+    .join(" · ")}`;
+  return joined.length <= HERMES_DELEGATION_DESCRIPTION_MAX_CHARS
+    ? joined
+    : `${joined.slice(0, HERMES_DELEGATION_DESCRIPTION_MAX_CHARS)}…`;
+}
+
+/**
+ * Linkage for one child of a fan-out.
+ *
+ * `taskType` is `"subagent"` rather than `"subagent_batch"` so the client
+ * counts these as individual agents — a batch that contained two children
+ * should read as "2 subagents and 1 batch", not as three batches. The rows
+ * bypass the timeline because the batch's own `task.started` already produced
+ * the work-log spawn row; N more would bury the turn.
+ */
+function hermesDelegationChildLinkage(child: HermesDelegationChildRow, toolCallId: string) {
+  return {
+    taskId: RuntimeTaskId.make(child.taskId),
+    taskType: "subagent",
+    toolUseId: toolCallId,
+    title: child.label,
+    agentIndex: child.index,
+    timelineBypass: true,
   } as const;
 }
 
@@ -651,6 +724,7 @@ export function makeHermesAdapter(
           readonly detail?: string;
         },
         tracked: HermesOpenDelegation | undefined,
+        marker: HermesDelegationMarker | undefined,
       ) {
         const linkage = hermesDelegationLinkage(toolCall.toolCallId);
         if (toolCall.status === "failed") {
@@ -670,16 +744,28 @@ export function makeHermesAdapter(
           return;
         }
         const status = toolCall.status === "pending" ? "pending" : "running";
-        const description = tracked?.description ?? toolCall.detail?.trim() ?? linkage.title;
+        // The dispatch handle is the only per-child identity Hermes puts on
+        // the wire, and it arrives once, on the terminal frame. Children are
+        // therefore built exactly once and never revised.
+        const children = tracked?.children.length
+          ? tracked.children
+          : hermesDelegationChildRows(toolCall.toolCallId, marker);
+        const description =
+          hermesDelegationDescription(children) ??
+          tracked?.description ??
+          toolCall.detail?.trim() ??
+          linkage.title;
         // Recorded before the event is published, not after. `offerRuntimeEvent`
         // is a yield point, and a settlement racing in on the other side of it
         // would find no open delegation and leave a row announced but never
         // settled.
+        const newChildren = tracked?.children.length ? [] : children;
         ctx.delegations.set(toolCall.toolCallId, {
           turnId,
           status,
           description,
           started: true,
+          children,
         });
         if (!tracked?.started) {
           yield* offerRuntimeEvent({
@@ -690,22 +776,32 @@ export function makeHermesAdapter(
             turnId,
             payload: { ...linkage, description },
           });
-          return;
+        } else if (tracked.status !== status || tracked.description !== description) {
+          // Dedup guard: ACP tool-call updates are chatty, and ingestion
+          // collapses task.progress onto one row per task anyway, so an
+          // unchanged repeat buys nothing.
+          yield* offerRuntimeEvent({
+            type: "task.progress",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: { ...linkage, description, status },
+          });
         }
-        // Dedup guard: ACP tool-call updates are chatty, and ingestion
-        // collapses task.progress onto one row per task anyway, so an
-        // unchanged repeat buys nothing.
-        if (tracked.status === status && tracked.description === description) {
-          return;
+        for (const child of newChildren) {
+          yield* offerRuntimeEvent({
+            type: "task.started",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: {
+              ...hermesDelegationChildLinkage(child, toolCall.toolCallId),
+              description: child.label,
+            },
+          });
         }
-        yield* offerRuntimeEvent({
-          type: "task.progress",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          turnId,
-          payload: { ...linkage, description, status },
-        });
       },
     );
 
@@ -727,6 +823,7 @@ export function makeHermesAdapter(
       Effect.gen(function* () {
         for (const [toolCallId, delegation] of ctx.delegations) {
           if (delegation === "finished") continue;
+          ctx.delegations.set(toolCallId, "finished");
           yield* offerRuntimeEvent({
             type: "task.updated",
             ...(yield* makeEventStamp()),
@@ -745,7 +842,23 @@ export function makeHermesAdapter(
               ...(error ? { error } : {}),
             },
           });
-          ctx.delegations.set(toolCallId, "finished");
+          for (const child of delegation.children) {
+            yield* offerRuntimeEvent({
+              type: "task.updated",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              turnId: delegation.turnId,
+              payload: {
+                ...hermesDelegationChildLinkage(child, toolCallId),
+                status,
+                ...(status === "idle"
+                  ? { description: HERMES_DELEGATION_CHILD_IDLE_DESCRIPTION }
+                  : {}),
+                ...(error ? { error } : {}),
+              },
+            });
+          }
         }
       });
 
@@ -1676,6 +1789,7 @@ export function makeHermesAdapter(
                     delegation.tracked?.turnId ?? settledTurnId,
                     delegation.toolCall,
                     delegation.tracked,
+                    delegation.marker,
                   );
                   return;
                 }
@@ -1739,6 +1853,7 @@ export function makeHermesAdapter(
                         delegation.tracked?.turnId ?? notificationTurnId,
                         delegation.toolCall,
                         delegation.tracked,
+                        delegation.marker,
                       );
                       return;
                     }
