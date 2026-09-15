@@ -45,6 +45,25 @@ const CLASSIFIED_KINDS = new Set(["execute", "read", "edit", "delete", "move", "
  */
 const FILE_CHANGING_KINDS = new Set(["edit", "delete", "move"]);
 
+/**
+ * The ACP tool kind Hermes uses for its workspace search, and only for that.
+ *
+ * Upstream `acp_adapter/tools.py` `TOOL_KIND_MAP` sends exactly one tool to
+ * `search` — the filesystem search — while every web tool (`web_search`,
+ * `web_extract`, `browser_navigate`) goes to `fetch`. That makes the kind a
+ * reliable signal *for Hermes*, which it is not for ACP in general: the
+ * protocol defines `search` as "Searching for information" with no statement
+ * about scope, and cursor-agent tags its built-in web search `search` too. So
+ * this inference belongs here, in the per-agent augmenter, and not in the
+ * shared kind mapping.
+ *
+ * Keyed on the kind rather than the title on purpose: Hermes builds titles as
+ * `f"{tool_name}: {preview}"` and has renamed the tool (`search` ->
+ * `search_files`) between releases, so a title prefix is version-dependent
+ * while the kind is not.
+ */
+const WORKSPACE_SEARCH_KIND = "search";
+
 /** `_START_CONTENT_BUILDERS["terminal"]` is `f"$ {command}"`, untruncated. */
 const SHELL_ECHO_PATTERN = /^\$[ \t]+(?<command>\S[\s\S]*)$/u;
 
@@ -121,6 +140,21 @@ function retainsFullOutput(input: AcpToolCallAugmentInput): boolean {
   );
 }
 
+/**
+ * Whether this row is a search of the workspace rather than of the network.
+ *
+ * The canonical item type cannot say: `canonicalItemTypeFromAcpToolKind`
+ * collapses both `search` and `fetch` onto `web_search`, because the contract
+ * has no local-search type. Without this marker the work log groups a Hermes
+ * grep as "Searched the web".
+ *
+ * `ActivityPayloadProjection` forwards `data.searchScope` explicitly; a key it
+ * does not list is dropped before any client sees it.
+ */
+function recoverSearchScope(input: AcpToolCallAugmentInput): "workspace" | undefined {
+  return input.kind === WORKSPACE_SEARCH_KIND ? "workspace" : undefined;
+}
+
 function recoverFiles(
   input: AcpToolCallAugmentInput,
 ): ReadonlyArray<{ readonly path: string }> | undefined {
@@ -152,14 +186,25 @@ export function hermesToolCallAugment(
   const command = recoverCommand(input);
   const detail = recoverDetail(input);
   const files = recoverFiles(input);
+  const searchScope = recoverSearchScope(input);
   const retainFullOutput = retainsFullOutput(input);
-  if (command === undefined && detail === undefined && files === undefined && !retainFullOutput) {
+  if (
+    command === undefined &&
+    detail === undefined &&
+    files === undefined &&
+    searchScope === undefined &&
+    !retainFullOutput
+  ) {
     return undefined;
   }
+  const data = {
+    ...(searchScope !== undefined ? { searchScope } : {}),
+    ...(retainFullOutput ? { retainFullOutput: true } : {}),
+  };
   return {
     ...(command !== undefined ? { command } : {}),
     ...(detail !== undefined ? { detail } : {}),
     ...(files !== undefined ? { files } : {}),
-    ...(retainFullOutput ? { data: { retainFullOutput: true } } : {}),
+    ...(Object.keys(data).length > 0 ? { data } : {}),
   };
 }
