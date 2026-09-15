@@ -670,4 +670,174 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
       yield* adapter.stopSession(threadId);
     }),
   );
+  it.effect("raises a delegate_task fan-out to the Agents surface instead of a command row", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-delegation-thread");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_HERMES_DELEGATION: "1" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const turnCompleted = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          runtimeEvents.push(event);
+        }).pipe(
+          Effect.andThen(
+            event.type === "turn.completed"
+              ? Deferred.succeed(turnCompleted, undefined)
+              : Effect.void,
+          ),
+        ),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "fan this out", attachments: [] });
+      yield* Deferred.await(turnCompleted);
+      yield* Fiber.interrupt(eventsFiber);
+
+      const started = runtimeEvents.find((event) => event.type === "task.started");
+      assert.isDefined(started);
+      if (started?.type === "task.started") {
+        assert.equal(started.payload.taskId, "tc-delegate-1");
+        assert.equal(started.payload.taskType, "subagent_batch");
+        assert.equal(started.payload.toolUseId, "tc-delegate-1");
+        assert.equal(started.payload.title, "Hermes delegated tasks");
+      }
+
+      // The launch tool call reports `completed` in milliseconds — it returns
+      // a dispatch handle, not a child result — so the batch must not settle
+      // on it. The turn ending is what settles it, and only to `idle`.
+      const completed = runtimeEvents.filter((event) => event.type === "task.completed");
+      assert.lengthOf(completed, 0);
+
+      const updated = runtimeEvents.filter((event) => event.type === "task.updated");
+      assert.lengthOf(updated, 1);
+      const settled = updated[0];
+      assert.isDefined(settled);
+      if (settled?.type === "task.updated") {
+        assert.equal(settled.payload.taskId, "tc-delegate-1");
+        assert.equal(settled.payload.status, "idle");
+        assert.isTrue(settled.payload.timelineBypass);
+        assert.include(settled.payload.description ?? "", "background queue");
+      }
+
+      // Emitting the work-log row too would show the same fan-out twice, and
+      // mislabelled: its ACP kind is `execute`, so the generic path renders it
+      // as "Ran command".
+      const delegationItems = runtimeEvents.filter(
+        (event) =>
+          (event.type === "item.updated" || event.type === "item.completed") &&
+          (event.payload.data as { readonly toolCallId?: string } | undefined)?.toolCallId ===
+            "tc-delegate-1",
+      );
+      assert.lengthOf(delegationItems, 0);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles an open delegation as cancelled when the turn is interrupted", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-delegation-cancel-thread");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_HERMES_DELEGATION: "hang" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const taskStarted = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          runtimeEvents.push(event);
+        }).pipe(
+          Effect.andThen(
+            event.type === "task.started" ? Deferred.succeed(taskStarted, undefined) : Effect.void,
+          ),
+        ),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const turnFiber = yield* adapter
+        .sendTurn({ threadId, input: "fan this out", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(taskStarted);
+      yield* adapter.interruptTurn(threadId);
+      yield* Fiber.await(turnFiber);
+      yield* Fiber.interrupt(eventsFiber);
+
+      const updated = runtimeEvents.filter((event) => event.type === "task.updated");
+      assert.isAtLeast(updated.length, 1);
+      const settled = updated.at(-1);
+      if (settled?.type === "task.updated") {
+        assert.equal(settled.payload.taskId, "tc-delegate-1");
+        assert.equal(settled.payload.status, "cancelled");
+        // Cancelled is a real outcome, so it carries no "we lost track" copy.
+        assert.isUndefined(settled.payload.timelineBypass);
+      }
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles an open delegation as cancelled when the session stops", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-delegation-stop-thread");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_HERMES_DELEGATION: "hang" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const taskStarted = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          runtimeEvents.push(event);
+        }).pipe(
+          Effect.andThen(
+            event.type === "task.started" ? Deferred.succeed(taskStarted, undefined) : Effect.void,
+          ),
+        ),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const turnFiber = yield* adapter
+        .sendTurn({ threadId, input: "fan this out", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(taskStarted);
+      yield* adapter.stopSession(threadId);
+      yield* Fiber.await(turnFiber);
+      yield* Fiber.interrupt(eventsFiber);
+
+      // A session teardown must settle the row before it announces the exit,
+      // so a client never sees a running agent on a dead session.
+      const settledIndex = runtimeEvents.findIndex((event) => event.type === "task.updated");
+      const exitedIndex = runtimeEvents.findIndex((event) => event.type === "session.exited");
+      assert.isAtLeast(settledIndex, 0);
+      assert.isAtLeast(exitedIndex, 0);
+      assert.isBelow(settledIndex, exitedIndex);
+
+      const settled = runtimeEvents[settledIndex];
+      if (settled?.type === "task.updated") {
+        assert.equal(settled.payload.taskId, "tc-delegate-1");
+        assert.equal(settled.payload.status, "cancelled");
+      }
+    }),
+  );
 });

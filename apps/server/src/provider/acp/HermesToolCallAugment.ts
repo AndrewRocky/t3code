@@ -22,6 +22,11 @@
  * @module provider/acp/HermesToolCallAugment
  */
 import type { AcpToolCallAugment, AcpToolCallAugmentInput } from "./AcpRuntimeModel.ts";
+import {
+  HERMES_DELEGATION_DATA_KEY,
+  type HermesDelegationMarker,
+  hermesDelegationMarkerFor,
+} from "./HermesSubagentProtocol.ts";
 
 /**
  * Bound on the detail recovered from a title. Hermes already clips its own
@@ -174,6 +179,23 @@ function recoverFiles(
 }
 
 /**
+ * Mark a `delegate_task` fan-out so the adapter can raise it to the Agents
+ * surface instead of leaving it as a generic command row.
+ *
+ * This is the one place Hermes' delegation conventions are read, because it is
+ * the last point at which the agent's own title is still observable — see
+ * {@link HermesSubagentProtocol} for why the title alone is not enough and what
+ * the terminal frame adds.
+ */
+function recoverDelegation(input: AcpToolCallAugmentInput): HermesDelegationMarker | undefined {
+  // `delegate_task` is mapped to `execute` in upstream's `TOOL_KIND_MAP`.
+  // Requiring the kind keeps a plugin tool that merely starts with the same
+  // word from being promoted to an agent row.
+  if (input.kind !== "execute") return undefined;
+  return hermesDelegationMarkerFor({ title: input.title, text: input.text });
+}
+
+/**
  * Recover what Hermes carries outside `rawInput`.
  *
  * Returns `undefined` when there is nothing to add, so a tool call that already
@@ -188,11 +210,13 @@ export function hermesToolCallAugment(
   const files = recoverFiles(input);
   const searchScope = recoverSearchScope(input);
   const retainFullOutput = retainsFullOutput(input);
+  const delegation = recoverDelegation(input);
   if (
     command === undefined &&
     detail === undefined &&
     files === undefined &&
     searchScope === undefined &&
+    delegation === undefined &&
     !retainFullOutput
   ) {
     return undefined;
@@ -200,6 +224,7 @@ export function hermesToolCallAugment(
   const data = {
     ...(searchScope !== undefined ? { searchScope } : {}),
     ...(retainFullOutput ? { retainFullOutput: true } : {}),
+    ...(delegation !== undefined ? { [HERMES_DELEGATION_DATA_KEY]: delegation } : {}),
   };
   return {
     ...(command !== undefined ? { command } : {}),

@@ -86,8 +86,27 @@ Hermes reads skills from `<HERMES_HOME>/skills`, and from `.agents/skills` or
 carrying [agentskills.io](https://agentskills.io) frontmatter. See
 [commands and skills](./composer.md#commands-and-skills) for invoking them.
 
+## Delegated subtasks
+
+Hermes can split work across subagents with its `delegate_task` tool. Each
+fan-out appears as one batch in [agent work](./thread-sidebar.md#inspect-agent-work).
+
+**A delegated subtask does not report back into the thread.** Hermes runs
+top-level delegations in a background queue and delivers their results through
+a channel its ACP adapter does not read, so the children finish, their results
+are written to Hermes' own storage, and nothing returns to this session. Hermes
+often says it will summarise the results when they arrive; on this connection
+they never do. The batch is marked **Idle** when the turn ends, rather than
+completed, because T3 Code cannot confirm what became of the children.
+
+If you need the results in-thread, keep the work in one turn instead of
+delegating it, or ask Hermes for a final answer rather than a fan-out.
+
 ## Limits
 
 Hermes stores its sessions in a SQLite `state.db` rather than a readable
 transcript, so it contributes nothing to the [Usage](./usage.md) page.
 Context-window telemetry still arrives live during a thread.
+
+Individual subagents inside a delegated batch cannot be opened, steered, or
+stopped from T3 Code, and their token usage is not reported.
