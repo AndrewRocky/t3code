@@ -31,22 +31,26 @@ example — and a custom model entry has to include it.
 Set **HERMES_HOME path** in provider settings to point at a Hermes home other than
 `~/.hermes`. It holds `config.yaml`, `auth.json`, `state.db`, and your skills.
 
+If sessions are slow to start, **Skip config.yaml MCP servers** in the provider's
+settings starts them without the MCP servers Hermes' own `config.yaml` lists.
+
 ## Permission modes
 
 Hermes is worth calling out because its own modes cover **file edits only**. See
 [permission modes](./permission-modes.md) for what the four T3 Code modes mean in
 general; against Hermes they land like this:
 
-| T3 Code mode      | Hermes edit policy                                         |
-| ----------------- | ---------------------------------------------------------- |
-| Supervised        | Asks before every edit.                                    |
-| Auto-accept edits | Auto-allows edits in the workspace and the temp directory. |
-| Full access       | Auto-allows edits anywhere.                                |
+| T3 Code mode      | Hermes edit policy                                          |
+| ----------------- | ----------------------------------------------------------- |
+| Supervised        | Asks before every edit.                                     |
+| Auto-accept edits | Auto-allows edits in the workspace and the temp directory.  |
+| Auto              | Same as Auto-accept edits — Hermes has no automatic review. |
+| Full access       | Auto-allows edits anywhere.                                 |
 
 Shell commands are not covered by any of that. Hermes always asks T3 Code before
 running one, and **Full access** is the only mode that answers for you.
 
-Under Supervised and Auto-accept edits, Hermes additionally refuses to touch
+Under Supervised, Auto, and Auto-accept edits, Hermes additionally refuses to touch
 sensitive paths unasked — anything under `.git` or `.ssh`, and `.env*`, `id_rsa`,
 or `id_ed25519` files. **Full access** does not carve out that exception: it
 auto-answers every prompt T3 Code receives, sensitive-path edits included.
@@ -86,6 +90,10 @@ Hermes reads skills from `<HERMES_HOME>/skills`, and from `.agents/skills` or
 carrying [agentskills.io](https://agentskills.io) frontmatter. See
 [commands and skills](./composer.md#commands-and-skills) for invoking them.
 
+The picker lists what Hermes will actually load. Skills Hermes has disabled,
+skills gated to another platform or environment, and project skills in a
+repository you have not trusted with `hermes skills trust` do not appear.
+
 ## Delegated subtasks
 
 Hermes can split work across subagents with its `delegate_task` tool. Each
@@ -102,6 +110,13 @@ completed, because T3 Code cannot confirm what became of the children.
 
 If you need the results in-thread, keep the work in one turn instead of
 delegating it, or ask Hermes for a final answer rather than a fan-out.
+
+## Context and compaction
+
+Hermes compresses context automatically as a thread approaches the model's
+limit, so a Hermes thread needs no manual compacting: `/compact` and the
+context meter's compact action are not offered against it. To compress the
+conversation on demand, send Hermes' own `/compress` command.
 
 ## Limits
 
