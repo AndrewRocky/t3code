@@ -876,6 +876,19 @@ export const HermesSettings = makeProviderSettingsSchema(
         providerSettingsForm: { control: "switch" },
       }),
     ),
+    // Hermes matches `skills.trusted_project_dirs` against the nearest `.git`,
+    // so every linked worktree is a project of its own and starts untrusted.
+    // Off by default: turning it on lets T3 extend a trust decision the user
+    // made for the main checkout into this profile's `config.yaml`.
+    trustWorktreesOfTrustedProjects: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Trust worktrees of trusted projects",
+        description:
+          "Load project skills in git worktrees of a project trusted with `hermes skills trust`. A worktree can check out another branch, so its skills may differ from the trusted checkout's.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),

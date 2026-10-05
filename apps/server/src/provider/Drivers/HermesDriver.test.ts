@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
@@ -68,14 +71,23 @@ const handle = (exitCode: number, stdout: string) =>
  * managed snapshot starts at creation settles as an error without ever
  * reaching a listing of its own.
  */
-const fakeHermes = (enabledNames: ReadonlyArray<string>, listingCwds: Array<string | undefined>) =>
+const fakeHermes = (
+  enabledNames: ReadonlyArray<string> | ((cwd: string | undefined) => ReadonlyArray<string>),
+  listingCwds: Array<string | undefined>,
+) =>
   ChildProcessSpawner.make((command) => {
     if (command._tag !== "StandardCommand") {
       return Effect.succeed(handle(1, ""));
     }
     if (command.args.join(" ") === "skills list --enabled-only") {
-      listingCwds.push(command.options.cwd);
-      return Effect.succeed(handle(0, enabledSkillsTable(enabledNames)));
+      const cwd = command.options.cwd;
+      listingCwds.push(cwd);
+      return Effect.sync(() =>
+        handle(
+          0,
+          enabledSkillsTable(typeof enabledNames === "function" ? enabledNames(cwd) : enabledNames),
+        ),
+      );
     }
     return Effect.succeed(handle(1, ""));
   });
@@ -138,6 +150,71 @@ it.layer(testLayer)("HermesDriver.snapshotForCwd", (it) => {
       Effect.provideService(
         ChildProcessSpawner.ChildProcessSpawner,
         fakeHermes(["clickhouse-cli", "unslop"], listingCwds),
+      ),
+      Effect.scoped,
+    );
+  });
+
+  it.effect("trusts a new worktree before Hermes lists its skills", () => {
+    const listingCwds: Array<string | undefined> = [];
+    const fixture: { configPath?: string } = {};
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-driver-trust-" }),
+      );
+      const hermesHome = path.join(tempDir, "hermes-home");
+      const main = path.join(tempDir, "repo");
+      const worktree = path.join(tempDir, "worktrees", "fan-3470");
+      const gitDir = path.join(main, ".git", "worktrees", "fan-3470");
+      yield* fs.makeDirectory(gitDir, { recursive: true });
+      yield* fs.writeFileString(path.join(gitDir, "commondir"), "../..\n");
+      yield* fs.makeDirectory(worktree, { recursive: true });
+      yield* fs.writeFileString(path.join(worktree, ".git"), `gitdir: ${gitDir}\n`);
+      yield* writeSkill(path.join(worktree, ".agents", "skills"), "clickhouse-cli");
+      // Always listed, so an untrusted listing is a real answer rather than
+      // the empty table the annotation refuses to act on.
+      yield* writeSkill(path.join(hermesHome, "skills"), "unslop");
+      fixture.configPath = path.join(hermesHome, "config.yaml");
+      yield* fs.makeDirectory(hermesHome, { recursive: true });
+      yield* fs.writeFileString(
+        fixture.configPath,
+        `skills:\n  trusted_project_dirs:\n    - ${main}\n`,
+      );
+
+      const instance = yield* HermesDriver.create({
+        instanceId: ProviderInstanceId.make("hermes-worktree"),
+        displayName: "Hermes test",
+        enabled: true,
+        environment: [],
+        config: {
+          ...HermesDriver.defaultConfig(),
+          binaryPath: "hermes",
+          homePath: hermesHome,
+          trustWorktreesOfTrustedProjects: true,
+        },
+      });
+      const scoped = yield* instance.snapshotForCwd!(worktree);
+
+      assert.deepStrictEqual(
+        scoped.skills.map((skill) => ({ name: skill.name, enabled: skill.enabled })),
+        [
+          { name: "clickhouse-cli", enabled: true },
+          { name: "unslop", enabled: true },
+        ],
+      );
+      assert.deepStrictEqual(listingCwds, [worktree]);
+    }).pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        // Like Hermes: a project's skills load only once its root is trusted
+        // in config.yaml, read when the listing runs.
+        fakeHermes((cwd) => {
+          const config = NodeFS.readFileSync(fixture.configPath ?? "", "utf8");
+          const trusted = cwd !== undefined && config.includes(cwd);
+          return trusted ? ["clickhouse-cli", "unslop"] : ["unslop"];
+        }, listingCwds),
       ),
       Effect.scoped,
     );

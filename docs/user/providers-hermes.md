@@ -94,6 +94,16 @@ The picker lists what Hermes will actually load. Skills Hermes has disabled,
 skills gated to another platform or environment, and project skills in a
 repository you have not trusted with `hermes skills trust` do not appear.
 
+Hermes trusts a path, not a repository, so a git worktree starts untrusted even
+when its main checkout is trusted, and worktree threads lose the project's
+skills. Turn on **Trust worktrees of trusted projects** in the provider's
+settings to have T3 Code trust each worktree of a trusted project before Hermes
+starts in it. A worktree can check out another branch, so its skills may differ
+from the ones you reviewed when you trusted the project. T3 Code removes the
+entries it added once their worktree is gone or the setting is turned off, and
+never touches ones you added yourself. It records them in
+`.t3code-worktree-trust.json` beside Hermes' `config.yaml`.
+
 ## Delegated subtasks
 
 Hermes can split work across subagents with its `delegate_task` tool. Each

@@ -49,6 +49,7 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
+import { syncHermesWorktreeTrust } from "./HermesWorktreeTrust.ts";
 
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
@@ -163,13 +164,22 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       // the thread's cwd (or worktree) and falls back to the machine snapshot
       // only while none exists, so project skills appear here. Only skills
       // vary by workspace: Hermes' slash commands are a fixed list.
+      //
+      // Worktree trust is synced first. A new worktree thread asks for this
+      // snapshot as soon as it learns its path, before any setup script runs,
+      // and the registry keeps the answer for the server's lifetime — so a
+      // listing taken before trust lands would hide the project skills for
+      // good.
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot
-          : Effect.all([
-              snapshot.getSnapshot,
-              discoverHermesSkillsForCwd(effectiveConfig, processEnv, workspaceCwd),
-            ]).pipe(
+          : syncHermesWorktreeTrust(effectiveConfig, processEnv, workspaceCwd).pipe(
+              Effect.andThen(
+                Effect.all([
+                  snapshot.getSnapshot,
+                  discoverHermesSkillsForCwd(effectiveConfig, processEnv, workspaceCwd),
+                ]),
+              ),
               Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(FileSystem.FileSystem, fileSystem),

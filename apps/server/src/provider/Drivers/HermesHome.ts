@@ -19,6 +19,7 @@ import type { HermesSettings } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 
 import { expandHomePath } from "../../pathExpansion.ts";
 
@@ -91,3 +92,47 @@ export function buildHermesEnvironment(input: {
     ...(input.config.skipConfiguredMcpServers ? { [HERMES_ACP_SKIP_CONFIGURED_MCP_ENV]: "1" } : {}),
   };
 }
+
+/**
+ * Expand a path entry from Hermes' `config.yaml` the way Hermes does
+ * (`agent/skill_utils.py:_expand_path` — `os.path.expanduser(os.path.expandvars(entry))`):
+ * `$VAR` and `${VAR}` from the environment Hermes runs with, unknown variables
+ * left as written, then a leading `~` as the user's home directory. Relative
+ * results are left relative; what they are relative to depends on the key.
+ */
+export function expandHermesConfigPath(entry: string, environment: NodeJS.ProcessEnv): string {
+  const withVariables = entry.replace(/\$(\w+|\{[^}]*\})/g, (match, name: string) => {
+    const key = name.startsWith("{") ? name.slice(1, -1) : name;
+    return environment[key] ?? match;
+  });
+  return expandHomePath(withVariables);
+}
+
+const configLocks = new Map<string, Semaphore.Semaphore>();
+
+/**
+ * Run `effect` holding the lock for one Hermes home's `config.yaml`.
+ *
+ * T3 rewrites that file from more than one place — the command-rule sync and
+ * the worktree-trust sync, on every session start and workspace snapshot —
+ * and each is a whole-file read-modify-write. Two threads starting together
+ * would otherwise each write from a stale read and silently drop the other's
+ * change, and a dropped trust entry is not self-healing: Hermes fixes its
+ * trust list for the life of the session it starts. Keyed by the resolved
+ * home rather than the instance, because two instances can share one home.
+ *
+ * Hermes' own writes to the file are outside this lock; see
+ * `./HermesCommandRules.ts` for why that narrower race is accepted.
+ */
+export const withHermesConfigLock = <A, E, R>(
+  home: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  Effect.suspend(() => {
+    let lock = configLocks.get(home);
+    if (lock === undefined) {
+      lock = Semaphore.makeUnsafe(1);
+      configLocks.set(home, lock);
+    }
+    return lock.withPermit(effect);
+  });

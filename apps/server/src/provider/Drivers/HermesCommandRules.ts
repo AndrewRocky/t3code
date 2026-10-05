@@ -72,6 +72,8 @@
  * the same additions from T3 settings on its own next session start — so the
  * failure mode is a transient omission, never corruption or a stuck state,
  * which is why no cross-process lock guards the read-modify-write below.
+ * Within T3 the cycle does hold `withHermesConfigLock`, shared with the
+ * worktree-trust sync, so two session starts never race each other.
  *
  * @module provider/Drivers/HermesCommandRules
  */
@@ -84,7 +86,7 @@ import * as Schema from "effect/Schema";
 import { parse as parseYamlDocument, stringify as stringifyYamlDocument } from "yaml";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
-import { resolveHermesHomePath } from "./HermesHome.ts";
+import { resolveHermesHomePath, withHermesConfigLock } from "./HermesHome.ts";
 
 /**
  * T3-owned sidecar, beside the `config.yaml` it describes, recording the
@@ -334,9 +336,16 @@ export const syncHermesCommandRules = Effect.fn("syncHermesCommandRules")(functi
   environment: NodeJS.ProcessEnv,
   cwd?: string,
 ): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
+  const home = yield* resolveHermesHomePath(hermesSettings, environment, cwd);
+  yield* withHermesConfigLock(home, syncHermesCommandRulesInHome(hermesSettings, home));
+});
+
+const syncHermesCommandRulesInHome = Effect.fn("syncHermesCommandRulesInHome")(function* (
+  hermesSettings: Pick<HermesSettings, "commandAllowlist" | "commandDenylist">,
+  home: string,
+): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const home = yield* resolveHermesHomePath(hermesSettings, environment, cwd);
   const configPath = path.join(home, "config.yaml");
   const provenancePath = path.join(home, HERMES_COMMAND_RULES_PROVENANCE_FILE);
 

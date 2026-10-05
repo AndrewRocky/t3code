@@ -114,6 +114,7 @@ import {
   hermesDelegationMarkerOf,
 } from "../acp/HermesSubagentProtocol.ts";
 import { syncHermesCommandRules } from "../Drivers/HermesCommandRules.ts";
+import { syncHermesWorktreeTrust } from "../Drivers/HermesWorktreeTrust.ts";
 import { applyHermesSkillDirective } from "../Drivers/HermesSkillDirective.ts";
 import { discoverHermesSkills } from "../Drivers/HermesSkills.ts";
 import {
@@ -1506,6 +1507,16 @@ export function makeHermesAdapter(
           // already resolved at construction time, rather than re-requiring
           // them here.
           yield* syncHermesCommandRules(
+            hermesSettings,
+            options?.environment ?? process.env,
+            cwd,
+          ).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
+          // Same contract. Hermes fixes its trust list for the session it is
+          // about to start, so a worktree must be trusted before the spawn.
+          yield* syncHermesWorktreeTrust(
             hermesSettings,
             options?.environment ?? process.env,
             cwd,
