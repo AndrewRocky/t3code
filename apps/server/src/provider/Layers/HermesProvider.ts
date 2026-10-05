@@ -26,6 +26,7 @@ import {
   type ModelCapabilities,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
@@ -43,6 +44,7 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { resolveHermesHomePath } from "../Drivers/HermesHome.ts";
 import { discoverHermesSkills } from "../Drivers/HermesSkills.ts";
 import {
   annotateHermesSkillsWithEnableState,
@@ -258,6 +260,64 @@ const runHermesCommand = (
     );
   });
 
+/**
+ * The skills Hermes would offer in `cwd`: the filesystem scan, annotated with
+ * Hermes' own enable state.
+ *
+ * Existence and paths come from the scan; enable-state comes from Hermes,
+ * which is the only party that can apply its config denylists, the
+ * `platforms:`/`environments:` gates, and the trusted-project quarantine. The
+ * annotation fails open — an unreachable or unparseable listing leaves every
+ * discovered skill enabled — so it can never be the reason the picker is
+ * empty.
+ *
+ * Both halves must run with the same `cwd`. The listing derives its project
+ * root and trust decision from its own working directory, so a listing run
+ * anywhere else omits the scan's project skills and the annotation would
+ * disable every one of them. Shared by the machine snapshot and
+ * `HermesDriver`'s per-workspace snapshot for that reason.
+ */
+export const discoverHermesSkillsForCwd = Effect.fn("discoverHermesSkillsForCwd")(function* (
+  hermesSettings: HermesSettings,
+  environment: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
+): Effect.fn.Return<
+  ReadonlyArray<ServerProviderSkill>,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> {
+  const discoveredSkills = yield* discoverHermesSkills(hermesSettings, environment, cwd);
+  const skillListing = yield* discoverHermesEnabledSkillNames(hermesSettings, environment, cwd);
+  const annotatedSkills = annotateHermesSkillsWithEnableState(discoveredSkills, skillListing);
+  if (annotatedSkills === undefined) {
+    if (discoveredSkills.length > 0) {
+      yield* Effect.logWarning(
+        "Could not apply `hermes skills list --enabled-only` to the discovered skills; treating every one as enabled.",
+        { discoveredSkills: discoveredSkills.length, listingRows: skillListing?.length },
+      );
+    }
+    return discoveredSkills;
+  }
+
+  // Hermes hiding *every* project skill almost always means the project is
+  // not in this profile's `skills.trusted_project_dirs`. That is the normal
+  // state of any repo nobody has trusted, so this is info, not a warning —
+  // it exists to make "why are my project skills missing" answerable from
+  // the log.
+  const projectSkills = annotatedSkills.filter((skill) => skill.scope === "project");
+  if (projectSkills.length > 0 && projectSkills.every((skill) => !skill.enabled)) {
+    yield* Effect.logInfo(
+      "Hermes loads none of this workspace's project skills; the project is probably not trusted for this Hermes profile (`hermes skills trust`).",
+      {
+        cwd,
+        hermesHome: yield* resolveHermesHomePath(hermesSettings, environment, cwd),
+        projectSkills: projectSkills.length,
+      },
+    );
+  }
+  return annotatedSkills;
+});
+
 export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(function* (
   hermesSettings: HermesSettings,
   environment: NodeJS.ProcessEnv = process.env,
@@ -404,22 +464,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     });
   }
 
-  // Existence and paths come from the filesystem scan; enable-state comes
-  // from Hermes, which is the only party that can apply its config
-  // denylists, the `platforms:`/`environments:` gates, and the trusted-project
-  // quarantine. The annotation fails open — an unreachable or unparseable
-  // listing leaves every discovered skill enabled, exactly as before it
-  // existed — so it can never be the reason the picker is empty.
-  const discoveredSkills = yield* discoverHermesSkills(hermesSettings, environment, cwd);
-  const skillListing = yield* discoverHermesEnabledSkillNames(hermesSettings, environment, cwd);
-  const annotatedSkills = annotateHermesSkillsWithEnableState(discoveredSkills, skillListing);
-  if (annotatedSkills === undefined && discoveredSkills.length > 0) {
-    yield* Effect.logWarning(
-      "Could not apply `hermes skills list --enabled-only` to the discovered skills; treating every one as enabled.",
-      { discoveredSkills: discoveredSkills.length, listingRows: skillListing?.length },
-    );
-  }
-  const skills = annotatedSkills ?? discoveredSkills;
+  const skills = yield* discoverHermesSkillsForCwd(hermesSettings, environment, cwd);
 
   const discoveryExit = yield* discoverHermesModelsViaAcp(hermesSettings, environment, cwd).pipe(
     Effect.timeoutOption(HERMES_ACP_MODEL_DISCOVERY_TIMEOUT_MS),

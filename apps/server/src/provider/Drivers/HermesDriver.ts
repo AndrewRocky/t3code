@@ -31,6 +31,7 @@ import { makeHermesAdapter } from "../Layers/HermesAdapter.ts";
 import {
   buildInitialHermesProviderSnapshot,
   checkHermesProviderStatus,
+  discoverHermesSkillsForCwd,
   enrichHermesSnapshot,
 } from "../Layers/HermesProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
@@ -157,6 +158,24 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         ),
       );
 
+      // The machine snapshot above is probed in the server's own cwd, which
+      // is rarely a project. The composer asks for this per-workspace view of
+      // the thread's cwd (or worktree) and falls back to the machine snapshot
+      // only while none exists, so project skills appear here. Only skills
+      // vary by workspace: Hermes' slash commands are a fixed list.
+      const snapshotForCwd = (workspaceCwd: string) =>
+        !effectiveConfig.enabled
+          ? snapshot.getSnapshot
+          : Effect.all([
+              snapshot.getSnapshot,
+              discoverHermesSkillsForCwd(effectiveConfig, processEnv, workspaceCwd),
+            ]).pipe(
+              Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            );
+
       return {
         instanceId,
         driverKind: DRIVER_KIND,
@@ -165,6 +184,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
+        snapshotForCwd,
         adapter,
         textGeneration,
       } satisfies ProviderInstance;
