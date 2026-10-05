@@ -26,6 +26,11 @@
  * `skills.external_dirs`. Sorting the collected paths before resolving names
  * mirrors `iter_skill_index_files`, which yields `sorted(matches)`.
  *
+ * Project-scoped skills hang off the *project root*, not the workspace cwd:
+ * Hermes walks up to the nearest `.git` and reads `.hermes/skills` and
+ * `.agents/skills` there (`agent/skill_utils.py:find_project_root`). See
+ * {@link findHermesProjectRoot}.
+ *
  * Known over-report: Hermes loads project-scoped skills only for a git root
  * the user has marked trusted with `hermes skills trust`, and quarantines any
  * that fail its security scan (`agent/skill_utils.py:460-558`). Neither gate
@@ -37,6 +42,8 @@
  *
  * @module provider/Drivers/HermesSkills
  */
+import * as NodeOS from "node:os";
+
 import type { HermesSettings, ServerProviderSkill } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -97,6 +104,9 @@ const ORG_ACTIVE_MARKER = ".active_org";
  * unbounded traversal.
  */
 const MAX_SCAN_DEPTH = 6;
+
+/** Walk-up bound for a pathological cwd (`skill_utils.py:_PROJECT_ROOT_MAX_DEPTH`). */
+const PROJECT_ROOT_MAX_DEPTH = 64;
 
 type SkillFrontmatter =
   | { readonly kind: "missing" }
@@ -190,6 +200,47 @@ function expandTilde(value: string, homeDirectory: string): string {
   }
   return value;
 }
+
+/**
+ * The project root Hermes would derive from `start`, or `undefined` when it
+ * would treat `start` as outside any project.
+ *
+ * Mirrors `agent/skill_utils.py:find_project_root`: resolve symlinks, then
+ * walk up to the nearest directory containing `.git` — a directory in a
+ * normal checkout, a file in a linked worktree or a submodule. A checkout at
+ * the home directory itself is not a project (a dotfiles repo there would
+ * otherwise make every session project-scoped), and neither is a directory
+ * with no `.git` above it: Hermes loads no project skills there at all.
+ *
+ * The root is also what `skills.trusted_project_dirs` is matched against, so
+ * callers that reason about trust must use this, not the raw cwd.
+ */
+export const findHermesProjectRoot = Effect.fn("findHermesProjectRoot")(function* (
+  start: string,
+  homeDirectory: string = NodeOS.homedir(),
+): Effect.fn.Return<string | undefined, never, FileSystem.FileSystem | Path.Path> {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const resolveReal = (value: string) =>
+    fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
+
+  const home = yield* resolveReal(homeDirectory);
+  let current = yield* resolveReal(start);
+  for (let depth = 0; depth < PROJECT_ROOT_MAX_DEPTH; depth++) {
+    const hasGit = yield* fileSystem
+      .exists(path.join(current, ".git"))
+      .pipe(Effect.orElseSucceed(() => false));
+    if (hasGit) {
+      return current === home ? undefined : current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+  return undefined;
+});
 
 /**
  * Collect every `SKILL.md` beneath `root`, mirroring
@@ -287,7 +338,8 @@ const collectSkillIndexPaths = Effect.fn("collectHermesSkillIndexPaths")(functio
 
 /**
  * Enumerate Hermes skills from the resolved Hermes home, the profile's extra
- * roots, and — when a workspace is known — the two project-scoped roots.
+ * roots, and — when a workspace is known — the two project-scoped roots under
+ * its project root.
  *
  * Discovery is best-effort: an unreadable root or a skill with malformed
  * frontmatter is skipped so a broken skill never degrades the provider
@@ -322,14 +374,18 @@ export const discoverHermesSkills = Effect.fn("discoverHermesSkills")(function* 
   // `.agents` (`PROJECT_SKILLS_SUBDIRS`), the profile-local root,
   // `skills.create_dir`, then each `skills.external_dirs` entry in the order
   // the user declared them (`get_all_skills_dirs`).
+  const userSkillsRoot = path.join(hermesHomePath, "skills");
+  const projectRoot = cwd ? yield* findHermesProjectRoot(cwd) : undefined;
+  const projectRoots = projectRoot
+    ? [path.join(projectRoot, ".hermes", "skills"), path.join(projectRoot, ".agents", "skills")]
+        // A Hermes home kept inside the checkout is the profile's own root,
+        // not a project root (`_candidate_project_skills_dirs`).
+        .filter((directory) => path.resolve(directory) !== path.resolve(userSkillsRoot))
+        .map((directory) => ({ directory, scope: "project" as const }))
+    : [];
   const roots: ReadonlyArray<{ directory: string; scope: HermesSkillScope }> = [
-    ...(cwd
-      ? [
-          { directory: path.join(cwd, ".hermes", "skills"), scope: "project" as const },
-          { directory: path.join(cwd, ".agents", "skills"), scope: "project" as const },
-        ]
-      : []),
-    { directory: path.join(hermesHomePath, "skills"), scope: "user" },
+    ...projectRoots,
+    { directory: userSkillsRoot, scope: "user" },
     ...(configRoots.createDir
       ? [{ directory: resolveConfiguredRoot(configRoots.createDir), scope: "user" as const }]
       : []),

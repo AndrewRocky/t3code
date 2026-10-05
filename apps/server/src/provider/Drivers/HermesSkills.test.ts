@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 
 import {
   discoverHermesSkills,
+  findHermesProjectRoot,
   parseHermesSkillConfigRoots,
   parseHermesSkillFrontmatter,
 } from "./HermesSkills.ts";
@@ -67,6 +68,7 @@ it.layer(NodeServices.layer)("discoverHermesSkills", (it) => {
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-skills-" });
       const hermesHome = path.join(tempDir, "hermes-home");
       const workspace = path.join(tempDir, "workspace");
+      yield* fs.makeDirectory(path.join(workspace, ".git"), { recursive: true });
 
       // Category-nested, the way `tools/skills_sync.py` installs them.
       yield* writeSkill(
@@ -336,6 +338,80 @@ it.layer(NodeServices.layer)("discoverHermesSkills", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("reads project skills from the git root, not the workspace subdirectory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-skills-root-" });
+      const repo = path.join(tempDir, "repo");
+      const subproject = path.join(repo, "packages", "api");
+      yield* fs.makeDirectory(path.join(repo, ".git"), { recursive: true });
+      yield* fs.makeDirectory(subproject, { recursive: true });
+      yield* writeSkill(
+        path.join(repo, ".agents", "skills"),
+        "clickhouse-cli",
+        frontmatter("clickhouse-cli", "Query ClickHouse."),
+      );
+
+      const skills = yield* discoverHermesSkills(
+        { homePath: path.join(tempDir, "hermes-home") },
+        {},
+        subproject,
+      );
+      assert.deepStrictEqual(
+        skills.map((skill) => ({ name: skill.name, scope: skill.scope })),
+        [{ name: "clickhouse-cli", scope: "project" }],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("loads no project skills outside a git checkout", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-skills-nogit-" });
+      const workspace = path.join(tempDir, "scratch");
+      yield* writeSkill(
+        path.join(workspace, ".agents", "skills"),
+        "review",
+        frontmatter("review", "Review the diff."),
+      );
+
+      const skills = yield* discoverHermesSkills(
+        { homePath: path.join(tempDir, "hermes-home") },
+        {},
+        workspace,
+      );
+      assert.deepStrictEqual(skills, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not badge a Hermes home kept inside the checkout as project-scoped", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-skills-inside-" });
+      const repo = path.join(tempDir, "repo");
+      yield* fs.makeDirectory(path.join(repo, ".git"), { recursive: true });
+      // HERMES_HOME=<repo>/.hermes makes <repo>/.hermes/skills the profile root.
+      yield* writeSkill(
+        path.join(repo, ".hermes", "skills"),
+        "notes/memory",
+        frontmatter("memory", "Profile skill."),
+      );
+
+      const skills = yield* discoverHermesSkills(
+        { homePath: path.join(repo, ".hermes") },
+        {},
+        repo,
+      );
+      assert.deepStrictEqual(
+        skills.map((skill) => ({ name: skill.name, scope: skill.scope })),
+        [{ name: "memory", scope: "user" }],
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("returns an empty list when nothing is installed", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -383,4 +459,45 @@ describe("parseHermesSkillConfigRoots", () => {
       { createDir: undefined, externalDirs: ["/ok"] },
     );
   });
+});
+
+it.layer(NodeServices.layer)("findHermesProjectRoot", (it) => {
+  it.effect("stops at the nearest .git, whether a directory or a worktree file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-root-" });
+      const realTemp = yield* fs.realPath(tempDir);
+      const home = path.join(realTemp, "home");
+      const repo = path.join(realTemp, "repo");
+      const worktree = path.join(realTemp, "worktrees", "feature");
+      yield* fs.makeDirectory(path.join(repo, ".git"), { recursive: true });
+      yield* fs.makeDirectory(path.join(repo, "src", "deep"), { recursive: true });
+      yield* fs.makeDirectory(path.join(worktree, "src"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(worktree, ".git"),
+        `gitdir: ${path.join(repo, ".git", "worktrees", "feature")}\n`,
+      );
+      yield* fs.makeDirectory(home, { recursive: true });
+
+      assert.equal(yield* findHermesProjectRoot(path.join(repo, "src", "deep"), home), repo);
+      // A linked worktree is its own project root, which is why trust granted
+      // to the main checkout does not reach it.
+      assert.equal(yield* findHermesProjectRoot(path.join(worktree, "src"), home), worktree);
+      assert.isUndefined(yield* findHermesProjectRoot(path.join(realTemp, "worktrees"), home));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("treats a checkout at the home directory as no project", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-root-home-" });
+      const home = path.join(tempDir, "home");
+      yield* fs.makeDirectory(path.join(home, ".git"), { recursive: true });
+      yield* fs.makeDirectory(path.join(home, "notes"), { recursive: true });
+
+      assert.isUndefined(yield* findHermesProjectRoot(path.join(home, "notes"), home));
+    }).pipe(Effect.scoped),
+  );
 });
