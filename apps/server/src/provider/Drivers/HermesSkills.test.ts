@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
@@ -5,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import { expandHermesConfigPath } from "./HermesHome.ts";
 import {
   discoverHermesSkills,
   findHermesProjectRoot,
@@ -310,6 +314,54 @@ it.layer(NodeServices.layer)("discoverHermesSkills", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("expands $VAR in skill roots and accepts a single external_dirs string", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-skills-vars-" });
+      const hermesHome = path.join(tempDir, "home");
+      const shared = path.join(tempDir, "team-skills");
+
+      yield* fs.makeDirectory(hermesHome, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(hermesHome, "config.yaml"),
+        ["skills:", "  external_dirs: ${TEAM_SKILLS}"].join("\n"),
+      );
+      yield* writeSkill(shared, "ops/team-runbook", frontmatter("team-runbook", "Shared root."));
+
+      const skills = yield* discoverHermesSkills({ homePath: hermesHome }, { TEAM_SKILLS: shared });
+      assert.deepStrictEqual(
+        skills.map((skill) => skill.name),
+        ["team-runbook"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not resolve ~ in a skill root against the Hermes home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hermes-skills-tilde-" });
+      const hermesHome = path.join(tempDir, "home");
+
+      // `~/.agents/skills` is Hermes' own example, and means the user's home.
+      // It used to be read as `<HERMES_HOME>/.agents/skills`.
+      yield* fs.makeDirectory(hermesHome, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(hermesHome, "config.yaml"),
+        ["skills:", "  external_dirs:", "    - ~/.agents/skills"].join("\n"),
+      );
+      yield* writeSkill(
+        path.join(hermesHome, ".agents", "skills"),
+        "misplaced",
+        frontmatter("misplaced", "Under the Hermes home, not the user's."),
+      );
+
+      const skills = yield* discoverHermesSkills({ homePath: hermesHome }, {});
+      assert.isFalse(skills.some((skill) => skill.name === "misplaced"));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("prefers the profile root over an external root on a name collision", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -451,6 +503,13 @@ describe("parseHermesSkillConfigRoots", () => {
     assert.deepStrictEqual(parseHermesSkillConfigRoots("skills: [unclosed"), empty);
   });
 
+  it("reads a single external_dirs string as a one-entry list", () => {
+    assert.deepStrictEqual(
+      parseHermesSkillConfigRoots(["skills:", "  external_dirs: /shared/team-skills"].join("\n")),
+      { createDir: undefined, externalDirs: ["/shared/team-skills"] },
+    );
+  });
+
   it("ignores non-string entries in external_dirs", () => {
     assert.deepStrictEqual(
       parseHermesSkillConfigRoots(
@@ -500,4 +559,24 @@ it.layer(NodeServices.layer)("findHermesProjectRoot", (it) => {
       assert.isUndefined(yield* findHermesProjectRoot(path.join(home, "notes"), home));
     }).pipe(Effect.scoped),
   );
+});
+
+describe("expandHermesConfigPath", () => {
+  it("expands variables first, then ~ as the user's home", () => {
+    const environment = { SKILLS: "/srv/skills", NESTED: "~/notes" };
+    assert.equal(expandHermesConfigPath("$SKILLS/team", environment), "/srv/skills/team");
+    assert.equal(expandHermesConfigPath("${SKILLS}/team", environment), "/srv/skills/team");
+    assert.equal(
+      expandHermesConfigPath("~/.agents/skills", environment),
+      `${NodeOS.homedir()}/.agents/skills`,
+    );
+    // os.path.expanduser runs after expandvars, so a variable holding ~ expands too.
+    assert.equal(expandHermesConfigPath("$NESTED", environment), `${NodeOS.homedir()}/notes`);
+  });
+
+  it("leaves unknown variables and relative paths as written", () => {
+    assert.equal(expandHermesConfigPath("$UNSET/x", {}), "$UNSET/x");
+    assert.equal(expandHermesConfigPath("${UNSET}/x", {}), "${UNSET}/x");
+    assert.equal(expandHermesConfigPath("authored", {}), "authored");
+  });
 });

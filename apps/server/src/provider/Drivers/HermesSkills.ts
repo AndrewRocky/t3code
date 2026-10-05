@@ -50,7 +50,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { parse as parseYamlDocument } from "yaml";
 
-import { resolveHermesHomePath } from "./HermesHome.ts";
+import { expandHermesConfigPath, resolveHermesHomePath } from "./HermesHome.ts";
 
 type HermesSkillScope = "user" | "project";
 
@@ -144,11 +144,10 @@ export function parseHermesSkillFrontmatter(contents: string): SkillFrontmatter 
   };
 }
 
+/** A string or a list of strings, as Hermes reads one (`skill_utils.py:_config_str_list`). */
 function asStringArray(value: unknown): ReadonlyArray<string> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
+  const entries = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+  return entries.flatMap((entry) => {
     if (typeof entry !== "string") {
       return [];
     }
@@ -158,13 +157,10 @@ function asStringArray(value: unknown): ReadonlyArray<string> {
 }
 
 /**
- * Extra skill roots a Hermes profile can declare.
- *
- * `skills.external_dirs` and `skills.create_dir` are resolved the way
- * `agent/skill_utils.py:332-378` resolves them: `~` expanded, and a relative
- * value taken as relative to the Hermes home rather than the workspace.
- * Exported for tests; a missing or malformed `config.yaml` yields no extra
- * roots rather than failing discovery.
+ * Extra skill roots a Hermes profile can declare: `skills.create_dir` and
+ * `skills.external_dirs`, the latter a string or a list. Exported for tests;
+ * a missing or malformed `config.yaml` yields no extra roots rather than
+ * failing discovery. The raw values are resolved in {@link discoverHermesSkills}.
  */
 export function parseHermesSkillConfigRoots(configYaml: string): {
   readonly createDir: string | undefined;
@@ -189,16 +185,6 @@ export function parseHermesSkillConfigRoots(configYaml: string): {
     createDir: createDirRaw.length > 0 ? createDirRaw : undefined,
     externalDirs: asStringArray(record.external_dirs),
   };
-}
-
-function expandTilde(value: string, homeDirectory: string): string {
-  if (value === "~") {
-    return homeDirectory;
-  }
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return `${homeDirectory}/${value.slice(2)}`;
-  }
-  return value;
 }
 
 /**
@@ -363,12 +349,11 @@ export const discoverHermesSkills = Effect.fn("discoverHermesSkills")(function* 
       Effect.map(parseHermesSkillConfigRoots),
       Effect.orElseSucceed(() => ({ createDir: undefined, externalDirs: [] as const })),
     );
-  const resolveConfiguredRoot = (value: string): string => {
-    const expanded = expandTilde(value, hermesHomePath);
-    return path.isAbsolute(expanded)
-      ? path.resolve(expanded)
-      : path.resolve(hermesHomePath, expanded);
-  };
+  // `_home_relative(_expand_path(entry))`: `~` is the user's home and `$VAR`
+  // comes from Hermes' environment; only a path still relative after that is
+  // taken relative to the Hermes home.
+  const resolveConfiguredRoot = (value: string): string =>
+    path.resolve(hermesHomePath, expandHermesConfigPath(value, environment));
 
   // Hermes' order, highest precedence first: project `.hermes` then
   // `.agents` (`PROJECT_SKILLS_SUBDIRS`), the profile-local root,
