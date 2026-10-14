@@ -112,6 +112,12 @@ Grok also encodes the runtime mode as a spawn flag, while Hermes can only be tol
 exists and never echoes the result back, so that mode is recorded optimistically and re-applied on
 every session start. See [`AcpSessionRuntime.ts`](../../apps/server/src/provider/acp/AcpSessionRuntime.ts).
 
+The shared runtime sends one `session/prompt` at a time and holds the next one until the running
+prompt answers. Hermes answers a turn's prompt only when the whole task is done, so a steer held
+that way reaches it after the work it was meant to change. Hermes folds a mid-turn prompt into the
+live turn and answers it at once, so its runtime opts into `concurrentPrompts`. Every other ACP
+adapter keeps one prompt at a time.
+
 The shared runtime model parses only the turn-content notifications. An agent that sends more —
 Hermes emits `usage_update`, `session_info_update`, and `available_commands_update` — needs a second
 raw `session/update` handler in its adapter, because handlers append rather than replace. Hermes'

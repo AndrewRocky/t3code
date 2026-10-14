@@ -140,6 +140,11 @@ export const makeHermesAcpRuntime = (
         ...input,
         spawn: buildHermesAcpSpawnInput(input.hermesSettings, input.cwd, input.environment),
         authMethodId: HERMES_AUTH_METHOD_SETUP,
+        // Hermes folds a prompt that arrives mid-turn into the running turn
+        // and answers it at once (see HermesSteerAck). Holding it until the
+        // turn's own prompt returns would deliver the steer after the work it
+        // was meant to change.
+        concurrentPrompts: true,
         // Hermes sends `raw_input: null` for every native tool and keeps the
         // command, the query and the target path in its title and start
         // content block instead. Without this the shared path has nothing to

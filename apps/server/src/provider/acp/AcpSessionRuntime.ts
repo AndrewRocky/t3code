@@ -91,6 +91,13 @@ export interface AcpSessionRuntimeOptions {
   /** Native cancellation waits for the prompt response and the getEvents consumer to drain. */
   readonly cancelBehavior?: "interrupt" | "wait-for-prompt";
   readonly cancelTimeout?: Duration.Input;
+  /**
+   * Dispatch a prompt while an earlier one is still running instead of
+   * holding it until that prompt's response arrives. Only for an agent that
+   * folds a mid-turn `session/prompt` into its live turn and answers it at
+   * once (Hermes). Every other adapter omits it and keeps one prompt at a time.
+   */
+  readonly concurrentPrompts?: boolean;
   readonly clientCapabilities?: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: {
     readonly name: string;
@@ -385,7 +392,8 @@ export const make = (
     const runtimeClosed = yield* Deferred.make<void>();
     const promptSerializationSemaphore = yield* Semaphore.make(1);
     const promptDispatchSemaphore = yield* Semaphore.make(1);
-    const activePromptRef = yield* Ref.make<Option.Option<AcpActivePrompt>>(Option.none());
+    // Dispatch order. Holds at most one prompt unless `concurrentPrompts` is set.
+    const activePromptsRef = yield* Ref.make<ReadonlyArray<AcpActivePrompt>>([]);
     const assistantUpdatesOpenRef = yield* Ref.make(true);
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
 
@@ -969,7 +977,7 @@ export const make = (
       yield* notificationSemaphore.withPermit(
         Effect.gen(function* () {
           // Keep a provider's final flushed chunks together until the adapter settles the turn.
-          if (Option.isNone(yield* Ref.get(activePromptRef))) {
+          if ((yield* Ref.get(activePromptsRef)).length === 0) {
             yield* Ref.set(assistantUpdatesOpenRef, false);
             yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
           }
@@ -988,10 +996,10 @@ export const make = (
 
     const cancel = Effect.gen(function* () {
       const started = yield* getStartedState;
-      const activePrompt = yield* Ref.get(activePromptRef);
+      const activePrompts = yield* Ref.get(activePromptsRef);
       if (options.cancelBehavior !== "wait-for-prompt") {
-        if (Option.isSome(activePrompt)) {
-          yield* Fiber.interrupt(activePrompt.value.fiber).pipe(Effect.ignore);
+        for (const activePrompt of activePrompts) {
+          yield* Fiber.interrupt(activePrompt.fiber).pipe(Effect.ignore);
         }
         // Write cancel before a replacement prompt can reach the agent.
         yield* acp.agent.cancel({ sessionId: started.sessionId }).pipe(Effect.ignore);
@@ -999,16 +1007,22 @@ export const make = (
       }
 
       yield* acp.agent.cancel({ sessionId: started.sessionId });
-      if (Option.isNone(activePrompt)) {
+      if (activePrompts.length === 0) {
         return;
       }
       const completed = yield* Effect.gen(function* () {
-        const result = yield* Fiber.await(activePrompt.value.fiber);
-        yield* Deferred.await(activePrompt.value.completed);
+        let failure: Cause.Cause<EffectAcpErrors.AcpError> | undefined;
+        for (const activePrompt of activePrompts) {
+          const result = yield* Fiber.await(activePrompt.fiber);
+          yield* Deferred.await(activePrompt.completed);
+          if (failure === undefined && Exit.isFailure(result)) {
+            failure = result.cause;
+          }
+        }
         if (Option.isNone(yield* Ref.get(terminationErrorRef))) {
           yield* drainEvents;
         }
-        return result;
+        return failure;
       }).pipe(Effect.timeoutOption(options.cancelTimeout ?? defaultCancelTimeout));
       if (Option.isNone(completed)) {
         const error = new EffectAcpErrors.AcpTransportError({
@@ -1020,10 +1034,13 @@ export const make = (
         yield* retireRuntime(error);
         return yield* error;
       }
-      if (Exit.isFailure(completed.value)) {
-        return yield* Effect.failCause(completed.value.cause);
+      if (completed.value !== undefined) {
+        return yield* Effect.failCause(completed.value);
       }
     });
+
+    const serializePrompt = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      options.concurrentPrompts === true ? effect : promptSerializationSemaphore.withPermit(effect);
 
     return {
       handleRequestPermission: acp.handleRequestPermission,
@@ -1048,7 +1065,7 @@ export const make = (
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
       prompt: (payload, promptOptions?) =>
-        promptSerializationSemaphore.withPermit(
+        serializePrompt(
           Effect.acquireUseRelease(
             promptDispatchSemaphore.withPermit(
               Effect.gen(function* () {
@@ -1066,7 +1083,7 @@ export const make = (
                   acp.agent.prompt(requestPayload),
                 ).pipe(Effect.forkIn(runtimeScope));
                 const active = { fiber, completed } satisfies AcpActivePrompt;
-                yield* Ref.set(activePromptRef, Option.some(active));
+                yield* Ref.update(activePromptsRef, (prompts) => [...prompts, active]);
                 if (promptOptions?.dispatched) {
                   yield* Deferred.succeed(promptOptions.dispatched, undefined);
                 }
@@ -1083,8 +1100,16 @@ export const make = (
                       stopReason: "cancelled",
                     } satisfies EffectAcpSchema.PromptResponse),
                 ),
+                // A steer that answers at once must not split the assistant
+                // message the earlier, still-running prompt is streaming.
                 Effect.tap(() =>
-                  closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef }),
+                  Ref.get(activePromptsRef).pipe(
+                    Effect.flatMap((prompts) =>
+                      prompts.some((prompt) => prompt !== activePrompt)
+                        ? Effect.void
+                        : closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef }),
+                    ),
+                  ),
                 ),
               ),
             (activePrompt, result) =>
@@ -1103,7 +1128,9 @@ export const make = (
                   );
                 }
                 yield* Fiber.interrupt(activePrompt.fiber).pipe(Effect.ignore);
-                yield* Ref.set(activePromptRef, Option.none());
+                yield* Ref.update(activePromptsRef, (prompts) =>
+                  prompts.filter((prompt) => prompt !== activePrompt),
+                );
                 yield* Deferred.succeed(activePrompt.completed, undefined);
               }),
           ),

@@ -86,6 +86,13 @@ const emitHermesMetadata = process.env.T3_ACP_EMIT_HERMES_METADATA === "1";
 // can settle the turn through cancel, steer or disconnect instead of
 // `end_turn`.
 const hermesDelegation = process.env.T3_ACP_HERMES_DELEGATION;
+// Hermes' mid-turn prompt handling (`acp_adapter/server.py
+// _claim_turn_or_queue`): a prompt that arrives while a turn runs is folded
+// into it. The receipt is one `agent_message_chunk`, then `end_turn` at once.
+// `"redirect"` folds it into the live turn, `"queue"` runs it after the turn's
+// own work, inside the same RPC. The live turn waits for that prompt, then
+// echoes it, so a test can see whether the steer arrived while it ran.
+const hermesSteer = process.env.T3_ACP_HERMES_STEER;
 const modeLogPath = process.env.T3_ACP_MODE_LOG_PATH;
 const permissionRequestCount = Math.max(
   1,
@@ -428,6 +435,8 @@ const program = Effect.gen(function* () {
   const resumeRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
+  // Per live turn: the steer it is waiting for.
+  let hermesSteerTurn: { readonly steer: Deferred.Deferred<string> } | undefined;
   const publishAntigravityCommands = (targetSessionId: string) =>
     agent.client.sessionUpdate({
       sessionId: targetSessionId,
@@ -694,6 +703,51 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
+
+      if (hermesSteer === "redirect" || hermesSteer === "queue") {
+        const text = request.prompt
+          .map((block) => (block.type === "text" ? block.text : ""))
+          .join("");
+        if (hermesSteerTurn) {
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: {
+                type: "text",
+                text:
+                  hermesSteer === "redirect"
+                    ? "Redirected the active turn with your correction."
+                    : "Queued for the next turn. (1 queued)",
+              },
+            },
+          });
+          yield* Deferred.succeed(hermesSteerTurn.steer, text);
+          return { stopReason: "end_turn" };
+        }
+        const turn = { steer: yield* Deferred.make<string>() };
+        hermesSteerTurn = turn;
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `Working on: ${text}.` },
+          },
+        });
+        const steer = yield* Deferred.await(turn.steer);
+        hermesSteerTurn = undefined;
+        // Keep working past the steer's own answer, as Hermes does, so the
+        // rest of this turn arrives after the client has settled the steer.
+        yield* Effect.sleep("100 millis");
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: ` Saw steer: ${steer}` },
+          },
+        });
+        return { stopReason: "end_turn" };
+      }
 
       if (completeFirstPromptOnCancel && promptCount === 1) {
         yield* agent.client.sessionUpdate({

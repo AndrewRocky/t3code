@@ -760,6 +760,50 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect("dispatches a concurrent prompt without closing the running prompt's stream", () =>
+    Effect.gen(function* () {
+      const texts: string[] = [];
+      const working = yield* Deferred.make<void>();
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        spawn: { ...mockRuntimeOptions.spawn, env: { T3_ACP_HERMES_STEER: "redirect" } },
+        concurrentPrompts: true,
+      });
+      yield* runtime.getEvents().pipe(
+        Stream.runForEach((event) => {
+          if (event._tag === "EventStreamBarrier") {
+            return Deferred.succeed(event.acknowledge, undefined);
+          }
+          if (event._tag === "ContentDelta") {
+            texts.push(event.text);
+            return event.text.startsWith("Working on")
+              ? Deferred.succeed(working, undefined)
+              : Effect.void;
+          }
+          return Effect.void;
+        }),
+        Effect.forkChild,
+      );
+      yield* runtime.start();
+      const first = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "first" }] })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(working);
+
+      // The mock's first prompt only ends once it sees this one.
+      const steer = yield* runtime.prompt({ prompt: [{ type: "text", text: "steer" }] });
+      // What an adapter does on settling the steer. The first prompt is still
+      // running, so its later chunks must not be gated off.
+      yield* runtime.drainEvents;
+      const firstResult = yield* Fiber.join(first);
+      yield* runtime.drainEvents;
+
+      expect(steer).toMatchObject({ stopReason: "end_turn" });
+      expect(firstResult).toMatchObject({ stopReason: "end_turn" });
+      expect(texts.join("")).toContain("Saw steer: steer");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("releases a fully silent prompt when session/cancel is requested", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;

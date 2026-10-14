@@ -108,6 +108,7 @@ import {
   makeHermesAcpRuntime,
   resolveHermesAcpBaseModelId,
 } from "../acp/HermesAcpSupport.ts";
+import { type HermesSteerAckFilter, makeHermesSteerAckFilter } from "../acp/HermesSteerAck.ts";
 import {
   hermesChildLabel,
   type HermesDelegationMarker,
@@ -369,6 +370,8 @@ interface HermesSessionContext {
   /** Last provenance seen, so a repeated compaction notice is not re-emitted. */
   lastProvenanceFingerprint: string | undefined;
   lastSessionTitle: string | undefined;
+  /** Recognises Hermes' receipt for each steer; see `../acp/HermesSteerAck.ts`. */
+  readonly steerAcks: HermesSteerAckFilter;
   stopped: boolean;
 }
 
@@ -1526,7 +1529,9 @@ export function makeHermesAdapter(
           );
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const steerAcks = makeHermesSteerAckFilter();
           const acp = yield* makeHermesAcpRuntime({
+            transformSessionUpdate: steerAcks.transformSessionUpdate,
             hermesSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
@@ -1737,6 +1742,7 @@ export function makeHermesAdapter(
               parseHermesSessionProvenance(started.sessionSetupResult),
             ),
             lastSessionTitle: undefined,
+            steerAcks,
             stopped: false,
           };
 
@@ -1957,8 +1963,10 @@ export function makeHermesAdapter(
             const ctx = yield* requireSession(input.threadId);
             // A sendTurn while a prompt is in flight is a steer. Hermes agrees:
             // it either redirects the live turn or queues the prompt behind it
-            // (`server.py:1877`), so the active turn id is reused rather than
-            // opening a second turn the agent does not believe exists.
+            // (`acp_adapter/server.py _claim_turn_or_queue`), so the active
+            // turn id is reused rather than opening a second turn the agent
+            // does not believe exists. The runtime dispatches it at once
+            // (`concurrentPrompts`) instead of after the running prompt.
             const steeringTurnId = ctx.promptsInFlight > 0 ? ctx.activeTurnId : undefined;
             const turnId = steeringTurnId ?? TurnId.make(yield* randomUUIDv4);
             // Count this prompt immediately so a superseded in-flight prompt
@@ -2105,6 +2113,7 @@ export function makeHermesAdapter(
                 displayModel,
                 promptParts,
                 turnId,
+                steerAcks: steeringTurnId === undefined ? undefined : ctx.steerAcks,
               };
             }).pipe(
               Effect.tapCause(() =>
@@ -2122,6 +2131,8 @@ export function makeHermesAdapter(
             );
           }),
         );
+        // Opened before dispatch: Hermes sends its receipt before it answers.
+        const steerTicket = prepared.steerAcks?.expect();
         const promptSettled = yield* Ref.make(false);
         const promptRpcSucceeded = yield* Ref.make(false);
         const promptResultRef = yield* Ref.make<EffectAcpSchema.PromptResponse | undefined>(
@@ -2186,6 +2197,9 @@ export function makeHermesAdapter(
               }
               yield* prepared.acp.drainEvents;
               consumePromptResponseReady(ctx);
+              // The receipt arrived before the response, so the drain above
+              // has already run it through the filter.
+              const steerOutcome = steerTicket?.close();
               if (ctx.interruptedTurnIds.has(prepared.turnId)) {
                 yield* Ref.set(promptSettled, true);
                 return {
@@ -2193,6 +2207,24 @@ export function makeHermesAdapter(
                   turnId: prepared.turnId,
                   resumeCursor: ctx.session.resumeCursor,
                 };
+              }
+              if (steerOutcome === "queued") {
+                // Hermes could not fold the message into the running turn
+                // (between a tool batch and the next model call) and will run
+                // it once that turn's work is done. The user believes it was
+                // delivered mid-turn, so say what actually happened.
+                const stamp = yield* makeEventStamp();
+                yield* offerRuntimeEvent({
+                  type: "runtime.warning",
+                  ...stamp,
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId: prepared.turnId,
+                  payload: {
+                    message:
+                      "Hermes queued your message instead of applying it right away. It will act on it after it finishes its current work.",
+                  },
+                });
               }
 
               if (
@@ -2341,6 +2373,7 @@ export function makeHermesAdapter(
               );
             }).pipe(Effect.ignore),
           ),
+          Effect.ensuring(Effect.sync(() => steerTicket?.close())),
         );
       });
 

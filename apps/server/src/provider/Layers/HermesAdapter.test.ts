@@ -252,6 +252,44 @@ const hermesAdapterTestLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-hermes-adapter-test-",
 }).pipe(Layer.provideMerge(NodeServices.layer));
 
+/**
+ * Records every runtime event and lets a test wait for the first event that
+ * matches, whether it has already arrived or not.
+ */
+const watchRuntimeEvents = (streamEvents: Stream.Stream<ProviderRuntimeEvent>) =>
+  Effect.gen(function* () {
+    const events: ProviderRuntimeEvent[] = [];
+    const waiters: Array<{
+      readonly match: (event: ProviderRuntimeEvent) => boolean;
+      readonly done: Deferred.Deferred<void>;
+    }> = [];
+    const fiber = yield* Stream.runForEach(streamEvents, (event) =>
+      Effect.gen(function* () {
+        events.push(event);
+        for (const waiter of waiters) {
+          if (waiter.match(event)) yield* Deferred.succeed(waiter.done, undefined);
+        }
+      }),
+    ).pipe(Effect.forkChild);
+    const waitFor = (match: (event: ProviderRuntimeEvent) => boolean) =>
+      Effect.gen(function* () {
+        const done = yield* Deferred.make<void>();
+        waiters.push({ match, done });
+        if (events.some(match)) return;
+        yield* Deferred.await(done);
+      });
+    return { events, waitFor, fiber };
+  });
+
+const assistantText = (events: ReadonlyArray<ProviderRuntimeEvent>) =>
+  events
+    .flatMap((event) =>
+      event.type === "content.delta" && event.payload.streamKind === "assistant_text"
+        ? [event.payload.delta]
+        : [],
+    )
+    .join("");
+
 const makeTestAdapter = (binaryPath: string, options?: Parameters<typeof makeHermesAdapter>[1]) =>
   makeHermesAdapter(decodeHermesSettings({ binaryPath, enabled: true }), options).pipe(
     Effect.orDie,
@@ -768,6 +806,91 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
             "tc-delegate-1",
       );
       assert.lengthOf(delegationItems, 0);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("delivers a steer to Hermes while the turn is still running", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-steer-redirect-thread");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_HERMES_STEER: "redirect" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const watch = yield* watchRuntimeEvents(adapter.streamEvents);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const firstTurn = yield* adapter
+        .sendTurn({ threadId, input: "change the background", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* watch.waitFor(
+        (event) => event.type === "content.delta" && event.payload.delta.startsWith("Working on"),
+      );
+
+      // The mock's turn only ends once it sees the steer, so this returning
+      // at all means the steer was not held behind the running prompt.
+      const steer = yield* adapter.sendTurn({
+        threadId,
+        input: "commit on branch dev",
+        attachments: [],
+      });
+      yield* watch.waitFor((event) => event.type === "turn.completed");
+      const first = yield* Fiber.join(firstTurn);
+      yield* Fiber.interrupt(watch.fiber);
+
+      assert.equal(steer.turnId, first.turnId);
+      assert.lengthOf(
+        watch.events.filter((event) => event.type === "turn.started"),
+        1,
+      );
+      const text = assistantText(watch.events);
+      assert.include(text, "Saw steer: commit on branch dev");
+      // Hermes' receipt is not the agent talking.
+      assert.notInclude(text, "Redirected the active turn");
+      assert.isUndefined(watch.events.find((event) => event.type === "runtime.warning"));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("warns when Hermes queues a steer instead of applying it", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-steer-queue-thread");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_HERMES_STEER: "queue" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const watch = yield* watchRuntimeEvents(adapter.streamEvents);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const firstTurn = yield* adapter
+        .sendTurn({ threadId, input: "change the background", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* watch.waitFor(
+        (event) => event.type === "content.delta" && event.payload.delta.startsWith("Working on"),
+      );
+      yield* adapter.sendTurn({ threadId, input: "commit on branch dev", attachments: [] });
+      yield* watch.waitFor((event) => event.type === "turn.completed");
+      yield* Fiber.join(firstTurn);
+      yield* Fiber.interrupt(watch.fiber);
+
+      assert.notInclude(assistantText(watch.events), "Queued for the next turn");
+      const warning = watch.events.find((event) => event.type === "runtime.warning");
+      assert.isDefined(warning);
+      if (warning?.type === "runtime.warning") {
+        assert.include(warning.payload.message, "queued your message");
+      }
 
       yield* adapter.stopSession(threadId);
     }),
