@@ -83,8 +83,9 @@ const emitHermesMetadata = process.env.T3_ACP_EMIT_HERMES_METADATA === "1";
 // wire: an `execute` tool call titled `delegate_task: …`, whose completion
 // arrives within milliseconds carrying a background dispatch handle rather
 // than any child result. `"hang"` leaves the prompt open afterwards so a test
-// can settle the turn through cancel, steer or disconnect instead of
-// `end_turn`.
+// can settle the turn through cancel or disconnect instead of `end_turn`. A
+// cancel answers the open prompt with `cancelled`, as Hermes' `_finish_turn`
+// does once the interrupted turn has wound down.
 const hermesDelegation = process.env.T3_ACP_HERMES_DELEGATION;
 // Hermes' mid-turn prompt handling (`acp_adapter/server.py
 // _claim_turn_or_queue`): a prompt that arrives while a turn runs is folded
@@ -435,8 +436,11 @@ const program = Effect.gen(function* () {
   const resumeRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
-  // Per live turn: the steer it is waiting for.
-  let hermesSteerTurn: { readonly steer: Deferred.Deferred<string> } | undefined;
+  const hermesHangCancelled = yield* Deferred.make<void>();
+  // Per live turn: the steer it is waiting for, and its cancellation.
+  let hermesSteerTurn:
+    | { readonly steer: Deferred.Deferred<string>; readonly cancelled: Deferred.Deferred<void> }
+    | undefined;
   const publishAntigravityCommands = (targetSessionId: string) =>
     agent.client.sessionUpdate({
       sessionId: targetSessionId,
@@ -674,6 +678,10 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const cancelledSessionId = String(sessionId ?? "mock-session-1");
       cancelledSessions.add(cancelledSessionId);
+      yield* Deferred.succeed(hermesHangCancelled, undefined);
+      if (hermesSteerTurn) {
+        yield* Deferred.succeed(hermesSteerTurn.cancelled, undefined);
+      }
       if (completeFirstPromptOnCancel) {
         yield* Deferred.succeed(nativeCancelRequested, undefined);
         yield* agent.client.sessionUpdate({
@@ -725,7 +733,10 @@ const program = Effect.gen(function* () {
           yield* Deferred.succeed(hermesSteerTurn.steer, text);
           return { stopReason: "end_turn" };
         }
-        const turn = { steer: yield* Deferred.make<string>() };
+        const turn = {
+          steer: yield* Deferred.make<string>(),
+          cancelled: yield* Deferred.make<void>(),
+        };
         hermesSteerTurn = turn;
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
@@ -734,7 +745,17 @@ const program = Effect.gen(function* () {
             content: { type: "text", text: `Working on: ${text}.` },
           },
         });
-        const steer = yield* Deferred.await(turn.steer);
+        const outcome = yield* Effect.raceFirst(
+          Deferred.await(turn.steer).pipe(Effect.map((steer) => ({ steer }))),
+          Deferred.await(turn.cancelled).pipe(Effect.as({ cancelled: true as const })),
+        );
+        if ("cancelled" in outcome) {
+          // Hermes stays busy while the interrupted tool and the finalizer
+          // wind down; a prompt arriving now would be taken as a steer.
+          yield* Effect.sleep("200 millis");
+          hermesSteerTurn = undefined;
+          return { stopReason: "cancelled" };
+        }
         hermesSteerTurn = undefined;
         // Keep working past the steer's own answer, as Hermes does, so the
         // rest of this turn arrives after the client has settled the steer.
@@ -743,7 +764,7 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: ` Saw steer: ${steer}` },
+            content: { type: "text", text: ` Saw steer: ${outcome.steer}` },
           },
         });
         return { stopReason: "end_turn" };
@@ -882,7 +903,8 @@ const program = Effect.gen(function* () {
           },
         });
         if (hermesDelegation === "hang") {
-          return yield* Effect.never;
+          yield* Deferred.await(hermesHangCancelled);
+          return { stopReason: "cancelled" };
         }
         return { stopReason: "end_turn" };
       }

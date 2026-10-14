@@ -115,8 +115,12 @@ every session start. See [`AcpSessionRuntime.ts`](../../apps/server/src/provider
 The shared runtime sends one `session/prompt` at a time and holds the next one until the running
 prompt answers. Hermes answers a turn's prompt only when the whole task is done, so a steer held
 that way reaches it after the work it was meant to change. Hermes folds a mid-turn prompt into the
-live turn and answers it at once, so its runtime opts into `concurrentPrompts`. Every other ACP
-adapter keeps one prompt at a time.
+live turn and answers it at once, so its runtime opts into `concurrentPrompts`. Stop has the
+opposite problem: `session/cancel` only asks, and Hermes keeps the turn alive while the running tool
+winds down. A prompt arriving in that window is taken as a correction to the dying turn. Hermes
+therefore cancels with `wait-for-prompt`, and its adapter holds the next `sendTurn` until Hermes has
+answered the cancelled prompt. The waiting happens off the provider command reactor, which runs every
+thread's commands on one worker. Every other ACP adapter keeps one prompt at a time.
 
 The shared runtime model parses only the turn-content notifications. An agent that sends more —
 Hermes emits `usage_update`, `session_info_update`, and `available_commands_update` — needs a second

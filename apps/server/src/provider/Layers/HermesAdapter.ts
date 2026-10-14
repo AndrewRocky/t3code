@@ -370,6 +370,12 @@ interface HermesSessionContext {
   /** Last provenance seen, so a repeated compaction notice is not re-emitted. */
   lastProvenanceFingerprint: string | undefined;
   lastSessionTitle: string | undefined;
+  /**
+   * Set from Stop until Hermes has really ended the interrupted turn. A
+   * sendTurn waits on it, so the next message reaches an idle Hermes as a
+   * new turn rather than as a correction to the turn being cancelled.
+   */
+  cancellation: Deferred.Deferred<void> | undefined;
   /** Recognises Hermes' receipt for each steer; see `../acp/HermesSteerAck.ts`. */
   readonly steerAcks: HermesSteerAckFilter;
   stopped: boolean;
@@ -1742,6 +1748,7 @@ export function makeHermesAdapter(
               parseHermesSessionProvenance(started.sessionSetupResult),
             ),
             lastSessionTitle: undefined,
+            cancellation: undefined,
             steerAcks,
             stopped: false,
           };
@@ -1957,10 +1964,15 @@ export function makeHermesAdapter(
 
     const sendTurn: HermesAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
-        const prepared = yield* withThreadLock(
+        const prepareUnderLock = withThreadLock(
           input.threadId,
           Effect.gen(function* () {
             const ctx = yield* requireSession(input.threadId);
+            if (ctx.cancellation !== undefined) {
+              // Stop is still waiting on Hermes. Sent now, this message would
+              // be taken as a correction to the turn being cancelled.
+              return { _tag: "Cancelling" as const, cancellation: ctx.cancellation };
+            }
             // A sendTurn while a prompt is in flight is a steer. Hermes agrees:
             // it either redirects the live turn or queues the prompt behind it
             // (`acp_adapter/server.py _claim_turn_or_queue`), so the active
@@ -2108,6 +2120,7 @@ export function makeHermesAdapter(
               }
 
               return {
+                _tag: "Prepared" as const,
                 acp: ctx.acp,
                 acpSessionId: ctx.acpSessionId,
                 displayModel,
@@ -2131,6 +2144,11 @@ export function makeHermesAdapter(
             );
           }),
         );
+        let prepared = yield* prepareUnderLock;
+        while (prepared._tag === "Cancelling") {
+          yield* Deferred.await(prepared.cancellation);
+          prepared = yield* prepareUnderLock;
+        }
         // Opened before dispatch: Hermes sends its receipt before it answers.
         const steerTicket = prepared.steerAcks?.expect();
         const promptSettled = yield* Ref.make(false);
@@ -2379,8 +2397,61 @@ export function makeHermesAdapter(
 
     // ── Remaining shape methods ──────────────────────────────────────
 
+    /**
+     * Ends an interrupted turn once Hermes has actually stopped it.
+     *
+     * `session/cancel` only asks. Hermes keeps the turn alive while the
+     * running tool winds down and its finalizer runs, and the runtime's
+     * `wait-for-prompt` cancel returns only after the cancelled prompt's
+     * response and its trailing events have arrived (or, past
+     * `HERMES_CANCEL_TIMEOUT`, after the process was killed). Settling only
+     * then keeps the thread honestly running until Hermes is idle, so the
+     * next message starts a new turn instead of being folded into the dying
+     * one as a correction nobody can see.
+     */
+    const cancelAndSettle = (ctx: HermesSessionContext, interruptedTurnId: TurnId | undefined) =>
+      Effect.gen(function* () {
+        yield* Effect.ignore(
+          ctx.acp.cancel.pipe(
+            Effect.mapError((error) =>
+              mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/cancel", error),
+            ),
+          ),
+        );
+        yield* withThreadLock(
+          ctx.threadId,
+          Effect.gen(function* () {
+            if (sessions.get(ctx.threadId) !== ctx) {
+              return;
+            }
+            if (interruptedTurnId) {
+              yield* settlePromptInFlight(ctx.threadId, interruptedTurnId, ctx.acpSessionId, {
+                completedStopReason: "cancelled",
+                settleAllPrompts: true,
+              });
+            } else if (
+              ctx.promptsInFlight > 0 ||
+              ctx.session.status === "running" ||
+              ctx.session.status === "connecting"
+            ) {
+              const updatedAt = yield* nowIso;
+              ctx.promptsInFlight = 0;
+              ctx.activeTurnId = undefined;
+              const { activeTurnId: _activeTurnId, ...readySession } = ctx.session;
+              ctx.session = {
+                ...readySession,
+                status: "ready",
+                updatedAt,
+              };
+              yield* clearTurnLiveness(ctx);
+            }
+          }),
+        );
+      });
+
     const interruptTurn: HermesAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
+        const cancellation = yield* Deferred.make<void>();
         const observed = yield* Effect.sync(() => {
           const ctx = sessions.get(threadId);
           if (!ctx || ctx.stopped) {
@@ -2388,6 +2459,7 @@ export function makeHermesAdapter(
               _tag: "Proceed" as const,
               acpSessionId: undefined,
               interruptedTurnId: turnId,
+              ownsCancellation: false,
             };
           }
           const activeTurnId = ctx.activeTurnId ?? ctx.session.activeTurnId;
@@ -2400,15 +2472,37 @@ export function makeHermesAdapter(
             // racing prompt settlement loses.
             ctx.interruptedTurnIds.add(interruptedTurnId);
           }
+          // Also before the lock: a sendTurn that wins the lock race must
+          // wait for this stop instead of steering the turn it ends.
+          const ownsCancellation = ctx.cancellation === undefined;
+          if (ownsCancellation) {
+            ctx.cancellation = cancellation;
+          }
           return {
             _tag: "Proceed" as const,
             acpSessionId: ctx.acpSessionId,
             interruptedTurnId,
+            ownsCancellation,
           };
         });
         if (observed._tag === "Ignore") {
           return;
         }
+
+        // Whoever ends up waiting on Hermes releases the cancellation. If
+        // this call bails out before handing it to that fiber, release it
+        // here so a waiting sendTurn is not stranded.
+        let handedOff = false;
+        const releaseCancellation = Effect.suspend(() => {
+          if (!observed.ownsCancellation || handedOff) {
+            return Effect.void;
+          }
+          const ctx = sessions.get(threadId);
+          if (ctx?.cancellation === cancellation) {
+            ctx.cancellation = undefined;
+          }
+          return Deferred.succeed(cancellation, undefined);
+        });
 
         yield* withThreadLock(
           threadId,
@@ -2431,37 +2525,30 @@ export function makeHermesAdapter(
             const interruptedTurnId =
               observed.interruptedTurnId ?? turnId ?? activeTurnId ?? ctx.session.activeTurnId;
             yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-            yield* Effect.ignore(
-              ctx.acp.cancel.pipe(
-                Effect.mapError((error) =>
-                  mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),
-                ),
-              ),
-            );
             if (interruptedTurnId) {
               ctx.interruptedTurnIds.add(interruptedTurnId);
-              yield* settlePromptInFlight(threadId, interruptedTurnId, ctx.acpSessionId, {
-                completedStopReason: "cancelled",
-                settleAllPrompts: true,
-              });
-            } else if (
-              ctx.promptsInFlight > 0 ||
-              ctx.session.status === "running" ||
-              ctx.session.status === "connecting"
-            ) {
-              const updatedAt = yield* nowIso;
-              ctx.promptsInFlight = 0;
-              ctx.activeTurnId = undefined;
-              const { activeTurnId: _activeTurnId, ...readySession } = ctx.session;
-              ctx.session = {
-                ...readySession,
-                status: "ready",
-                updatedAt,
-              };
-              yield* clearTurnLiveness(ctx);
             }
+            if (!observed.ownsCancellation) {
+              // An earlier Stop is already waiting on Hermes and settles the turn.
+              return;
+            }
+            // Wait for Hermes off the caller's fiber: the provider command
+            // reactor runs every thread's commands on one worker, and a stop
+            // can take seconds while Hermes kills the running command.
+            handedOff = true;
+            yield* cancelAndSettle(ctx, interruptedTurnId).pipe(
+              Effect.ensuring(
+                Effect.suspend(() => {
+                  if (ctx.cancellation === cancellation) {
+                    ctx.cancellation = undefined;
+                  }
+                  return Deferred.succeed(cancellation, undefined);
+                }),
+              ),
+              Effect.forkIn(ctx.scope),
+            );
           }),
-        );
+        ).pipe(Effect.ensuring(releaseCancellation));
       });
 
     const respondToRequest: HermesAdapterShape["respondToRequest"] = (

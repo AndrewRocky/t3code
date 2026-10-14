@@ -35,6 +35,7 @@
 import { type HermesSettings, ProviderDriverKind, type RuntimeMode } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
@@ -63,6 +64,15 @@ export const HERMES_FALLBACK_MODEL_ID = "openrouter:z-ai/glm-5.2";
 export const HERMES_MODE_DEFAULT = "default";
 export const HERMES_MODE_ACCEPT_EDITS = "accept_edits";
 export const HERMES_MODE_DONT_ASK = "dont_ask";
+
+/**
+ * How long Stop waits for Hermes to finish a cancelled turn before the process
+ * is killed. Hermes kills a foreground command within a few seconds of a
+ * cancel (TERM, 1 s, KILL), so this budget is for the slow tail: a tool that
+ * never checks for the stop request, or a compression commit a hard stop waits
+ * on. Killing the process is the last resort; the session resumes from disk.
+ */
+const HERMES_CANCEL_TIMEOUT = Duration.seconds(30);
 
 export type HermesAcpRuntimeHermesSettings = Pick<
   HermesSettings,
@@ -140,6 +150,13 @@ export const makeHermesAcpRuntime = (
         ...input,
         spawn: buildHermesAcpSpawnInput(input.hermesSettings, input.cwd, input.environment),
         authMethodId: HERMES_AUTH_METHOD_SETUP,
+        // Stop is not done until Hermes says so. `session/cancel` only asks:
+        // Hermes keeps its turn alive while the running tool winds down, and a
+        // prompt sent in that window is taken as a correction to the dying
+        // turn rather than a new one. Waiting for the cancelled prompt's
+        // response is what makes the next prompt reach an idle session.
+        cancelBehavior: "wait-for-prompt",
+        cancelTimeout: HERMES_CANCEL_TIMEOUT,
         // Hermes folds a prompt that arrives mid-turn into the running turn
         // and answers it at once (see HermesSteerAck). Holding it until the
         // turn's own prompt returns would deliver the steer after the work it

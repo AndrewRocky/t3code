@@ -896,6 +896,62 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
     }),
   );
 
+  it.effect("starts a new turn after Stop only once Hermes has stopped", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-stop-then-send-thread");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({ T3_ACP_HERMES_STEER: "redirect" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const watch = yield* watchRuntimeEvents(adapter.streamEvents);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const firstTurn = yield* adapter
+        .sendTurn({ threadId, input: "change the background", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* watch.waitFor(
+        (event) => event.type === "content.delta" && event.payload.delta.startsWith("Working on"),
+      );
+
+      // The mock keeps its cancelled turn alive briefly, as Hermes does while
+      // the running tool winds down. A message sent in that window must not
+      // reach it as a steer.
+      yield* adapter.interruptTurn(threadId);
+      // Left running: the mock's second turn waits for a steer that never comes.
+      yield* adapter
+        .sendTurn({ threadId, input: "start over", attachments: [] })
+        .pipe(Effect.forkChild);
+      const isSecondTurnOutput = (event: ProviderRuntimeEvent) =>
+        event.type === "content.delta" && event.payload.delta === "Working on: start over.";
+      yield* watch.waitFor(isSecondTurnOutput);
+      yield* Fiber.join(firstTurn);
+      yield* Fiber.interrupt(watch.fiber);
+
+      const started = watch.events.filter((event) => event.type === "turn.started");
+      assert.lengthOf(started, 2);
+      // Hermes ran it as a turn of its own, under the new T3 turn.
+      assert.equal(watch.events.find(isSecondTurnOutput)?.turnId, started[1]?.turnId);
+      const completedIndex = watch.events.findIndex(
+        (event) => event.type === "turn.completed" && event.turnId === started[0]?.turnId,
+      );
+      const completed = watch.events[completedIndex];
+      assert.isDefined(completed);
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.payload.state, "cancelled");
+      }
+      // The first turn ended before the second one began.
+      assert.isBelow(completedIndex, watch.events.indexOf(started[1]!));
+      assert.notInclude(assistantText(watch.events), "Redirected the active turn");
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("settles an open delegation as cancelled when the turn is interrupted", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("hermes-delegation-cancel-thread");
@@ -906,12 +962,17 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
 
       const runtimeEvents: ProviderRuntimeEvent[] = [];
       const taskStarted = yield* Deferred.make<void>();
+      const turnCompleted = yield* Deferred.make<void>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
         Effect.sync(() => {
           runtimeEvents.push(event);
         }).pipe(
           Effect.andThen(
-            event.type === "task.started" ? Deferred.succeed(taskStarted, undefined) : Effect.void,
+            event.type === "task.started"
+              ? Deferred.succeed(taskStarted, undefined)
+              : event.type === "turn.completed"
+                ? Deferred.succeed(turnCompleted, undefined)
+                : Effect.void,
           ),
         ),
       ).pipe(Effect.forkChild);
@@ -927,6 +988,8 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
         .pipe(Effect.forkChild);
       yield* Deferred.await(taskStarted);
       yield* adapter.interruptTurn(threadId);
+      // Stop settles once Hermes has answered the cancelled prompt.
+      yield* Deferred.await(turnCompleted);
       yield* Fiber.await(turnFiber);
       yield* Fiber.interrupt(eventsFiber);
 
