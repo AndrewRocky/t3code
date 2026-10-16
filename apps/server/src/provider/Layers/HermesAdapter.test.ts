@@ -616,6 +616,52 @@ it.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
     }),
   );
 
+  it.effect("shows a MEDIA: tag in Hermes' reply as an image before the turn ends", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-media-tag-thread");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({
+          // One line: the wrapper's `export` cannot carry a newline.
+          T3_ACP_PROMPT_RESPONSE_TEXT: "Here is the page: MEDIA:/tmp/hermes-shot.png",
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const watched = yield* watchRuntimeEvents(adapter.streamEvents);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("hermes"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "show me the page", attachments: [] });
+      yield* watched.waitFor((event) => event.type === "turn.completed");
+      yield* Fiber.interrupt(watched.fiber);
+
+      assert.equal(
+        assistantText(watched.events),
+        "Here is the page: ![hermes-shot.png](/tmp/hermes-shot.png)",
+      );
+      // The text before the tag streams at once. The tag ends the message, so
+      // it is held until the message closes — and must still land inside it,
+      // ahead of the turn's end.
+      const firstDelta = watched.events.find((event) => event.type === "content.delta");
+      assert.equal(
+        firstDelta?.type === "content.delta" ? firstDelta.payload.delta : undefined,
+        "Here is the page: ",
+      );
+      const types = watched.events.map((event) => event.type);
+      const imageIndex = watched.events.findIndex(
+        (event) => event.type === "content.delta" && event.payload.delta.startsWith("![hermes"),
+      );
+      assert.isAbove(imageIndex, -1);
+      assert.isBelow(imageIndex, types.lastIndexOf("item.completed"));
+      assert.isBelow(imageIndex, types.indexOf("turn.completed"));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("rewrites a `$skill` token into a skill_view directive on the wire", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("hermes-skill-directive-thread");

@@ -116,6 +116,11 @@ import {
 } from "../acp/HermesSubagentProtocol.ts";
 import { syncHermesCommandRules } from "../Drivers/HermesCommandRules.ts";
 import { syncHermesWorktreeTrust } from "../Drivers/HermesWorktreeTrust.ts";
+import {
+  type HermesMediaTagStream,
+  hostHermesMediaTagOptions,
+  makeHermesMediaTagStream,
+} from "../Drivers/HermesMediaTags.ts";
 import { applyHermesSkillDirective } from "../Drivers/HermesSkillDirective.ts";
 import { discoverHermesSkills } from "../Drivers/HermesSkills.ts";
 import {
@@ -378,7 +383,21 @@ interface HermesSessionContext {
   cancellation: Deferred.Deferred<void> | undefined;
   /** Recognises Hermes' receipt for each steer; see `../acp/HermesSteerAck.ts`. */
   readonly steerAcks: HermesSteerAckFilter;
+  /**
+   * The assistant message being streamed, with the `MEDIA:` tag text it is
+   * holding back; see `../Drivers/HermesMediaTags.ts`. One at a time: ACP
+   * closes a message before it opens the next.
+   */
+  mediaTags: HermesMediaTagMessage | undefined;
   stopped: boolean;
+}
+
+interface HermesMediaTagMessage {
+  readonly turnId: TurnId;
+  readonly itemId: string | undefined;
+  readonly stream: HermesMediaTagStream;
+  /** Hermes' latest chunk of this message, which held-back text came from. */
+  rawPayload: unknown;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -870,6 +889,55 @@ export function makeHermesAdapter(
             });
           }
         }
+      });
+
+    // ── Assistant text ───────────────────────────────────────────────
+
+    /**
+     * Ends the message whose `MEDIA:` tags are being rewritten and shows the
+     * text it held back. Text held for a turn that is no longer `turnId`'s
+     * belongs to a stopped turn and is dropped with it.
+     */
+    const flushHermesMediaTags = (ctx: HermesSessionContext, turnId: TurnId) =>
+      Effect.gen(function* () {
+        const message = ctx.mediaTags;
+        ctx.mediaTags = undefined;
+        if (message === undefined || message.turnId !== turnId) return;
+        const text = message.stream.flush();
+        if (text.length === 0) return;
+        yield* offerRuntimeEvent(
+          makeAcpContentDeltaEvent({
+            stamp: yield* makeEventStamp(),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            ...(message.itemId ? { itemId: message.itemId } : {}),
+            text,
+            rawPayload: message.rawPayload,
+          }),
+        );
+      });
+
+    /** The part of an assistant chunk that can be shown now, with `MEDIA:` tags rewritten. */
+    const takeHermesAssistantText = (
+      ctx: HermesSessionContext,
+      turnId: TurnId,
+      event: Extract<AcpSessionRuntime.AcpSessionRuntimeEvent, { _tag: "ContentDelta" }>,
+    ) =>
+      Effect.gen(function* () {
+        let message = ctx.mediaTags;
+        if (message?.turnId !== turnId || message.itemId !== event.itemId) {
+          yield* flushHermesMediaTags(ctx, turnId);
+          message = {
+            turnId,
+            itemId: event.itemId,
+            stream: makeHermesMediaTagStream(hostHermesMediaTagOptions),
+            rawPayload: event.rawPayload,
+          };
+          ctx.mediaTags = message;
+        }
+        message.rawPayload = event.rawPayload;
+        return message.stream.push(event.text);
       });
 
     // ── Turn liveness ────────────────────────────────────────────────
@@ -1750,6 +1818,7 @@ export function makeHermesAdapter(
             lastSessionTitle: undefined,
             cancellation: undefined,
             steerAcks,
+            mediaTags: undefined,
             stopped: false,
           };
 
@@ -1825,6 +1894,20 @@ export function makeHermesAdapter(
                 ) {
                   yield* recordTurnActivity(ctx, notificationTurnId, event);
                 }
+                // Hermes hands the user a file as `MEDIA:<path>` in its reply
+                // text (not its reasoning). Rewriting it can release text held
+                // back from earlier chunks, so it runs before this event is
+                // stamped and that text keeps its place in the event order.
+                if (
+                  event._tag === "AssistantItemCompleted" &&
+                  ctx.mediaTags?.itemId === event.itemId
+                ) {
+                  yield* flushHermesMediaTags(ctx, notificationTurnId);
+                }
+                const replyText =
+                  event._tag === "ContentDelta"
+                    ? yield* takeHermesAssistantText(ctx, notificationTurnId, event)
+                    : undefined;
                 const stamp = yield* makeEventStamp();
 
                 switch (event._tag) {
@@ -1897,7 +1980,9 @@ export function makeHermesAdapter(
                   // assistant message. Mirrors the Antigravity adapter; Cursor
                   // and Grok still drop reasoning, which is their own call.
                   case "ThoughtDelta":
-                  case "ContentDelta":
+                  case "ContentDelta": {
+                    const text = replyText ?? event.text;
+                    if (text.length === 0) return;
                     yield* offerRuntimeEvent(
                       makeAcpContentDeltaEvent({
                         stamp,
@@ -1910,11 +1995,12 @@ export function makeHermesAdapter(
                         ...(event._tag === "ThoughtDelta"
                           ? { streamKind: "reasoning_text" as const }
                           : {}),
-                        text: event.text,
+                        text,
                         rawPayload: event.rawPayload,
                       }),
                     );
                     return;
+                  }
                 }
               }),
             ),
@@ -2301,6 +2387,9 @@ export function makeHermesAdapter(
                   ctx,
                   result.stopReason === "cancelled" ? "cancelled" : "idle",
                 );
+                // The drain above normally closed the last message already;
+                // this keeps its held-back text from outliving the turn if not.
+                yield* flushHermesMediaTags(ctx, prepared.turnId);
                 yield* clearTurnLiveness(ctx);
                 yield* offerRuntimeEvent({
                   type: "turn.completed",
