@@ -52,7 +52,7 @@
     },
     {
       "driver": "hermes",
-      "t3CodeRange": ">=0.1.2",
+      "t3CodeRange": ">=0.1.0",
       "recommendedRange": ">=0.22.5",
       "ranges": [
         { "range": ">=0.22.3", "status": "supported" },
