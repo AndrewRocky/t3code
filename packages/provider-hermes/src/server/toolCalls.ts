@@ -35,6 +35,14 @@ const GENERIC_OUTPUT_PATTERN =
 const GATEWAY_EDITOR_MCP_TITLE_PATTERN =
   /^mcp__editor_(?<server>[A-Za-z0-9_-]+?)_[0-9a-f]{8}__(?<rest>.+)$/su;
 
+/**
+ * Kinds the shared presentation turns into a fixed label ("Searched files",
+ * "Ran command"). Without a detail the row loses what Hermes searched for or
+ * ran, which Hermes' own title (`web search: <query>`, `python: <code>`) keeps.
+ */
+const FIXED_LABEL_KINDS = new Set(["execute", "read", "edit", "delete", "move", "search", "fetch"]);
+const MAX_TITLE_DETAIL_CHARS = 160;
+
 function trimmed(value: string | undefined): string | undefined {
   const next = value?.trim();
   return next && next.length > 0 ? next : undefined;
@@ -72,6 +80,19 @@ function recoverCommand(toolCall: AcpToolCallState): string | undefined {
   if (trimmed(echoed)) return trimmed(echoed);
   const title = verbatimTitle(toolCall);
   return trimmed(title ? TERMINAL_TITLE_PATTERN.exec(title)?.groups?.command : undefined);
+}
+
+/** A row that already names a command or a file keeps its own label. */
+function recoverDetail(toolCall: AcpToolCallState): string | undefined {
+  if (toolCall.kind === undefined || !FIXED_LABEL_KINDS.has(toolCall.kind)) return undefined;
+  if (toolCall.detail !== undefined || toolCall.command !== undefined) return undefined;
+  const locations = toolCall.data.locations;
+  if (Array.isArray(locations) && locations.length > 0) return undefined;
+  const title = trimmed(verbatimTitle(toolCall));
+  if (title === undefined) return undefined;
+  return title.length <= MAX_TITLE_DETAIL_CHARS
+    ? title
+    : `${title.slice(0, MAX_TITLE_DETAIL_CHARS - 1).trimEnd()}…`;
 }
 
 function isTerminal(toolCall: AcpToolCallState): boolean {
@@ -131,6 +152,10 @@ export function normalizeHermesToolCall(toolCall: AcpToolCallState): AcpToolCall
   const command = recoverCommand(next);
   if (command !== undefined) {
     next = { ...next, command, data: { ...next.data, command } };
+  }
+  const detail = recoverDetail(next);
+  if (detail !== undefined) {
+    next = { ...next, detail };
   }
   const delegationSummary = summarizeDelegation(next);
   if (delegationSummary !== undefined) {

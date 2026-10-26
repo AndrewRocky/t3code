@@ -82,6 +82,36 @@ describe("normalizeHermesToolCall", () => {
     assert.isUndefined(state.command);
   });
 
+  it("keeps what Hermes searched for or ran when the row has a fixed label", () => {
+    const search = lifecycle({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-search",
+      title: "web search: effect layer composition",
+      kind: "fetch",
+      status: "in_progress",
+    });
+    assert.strictEqual(search.detail, "web search: effect layer composition");
+
+    const code = lifecycle({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-code",
+      title: "python: import pandas as pd",
+      kind: "execute",
+      status: "in_progress",
+    });
+    assert.strictEqual(code.detail, "python: import pandas as pd");
+
+    const read = lifecycle({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-read",
+      title: "read_file: src/app.ts",
+      kind: "read",
+      status: "in_progress",
+      locations: [{ path: "/repo/src/app.ts" }],
+    });
+    assert.isUndefined(read.detail);
+  });
+
   it("restores the editor MCP server name the gateway rewrote", () => {
     const state = lifecycle({
       sessionUpdate: "tool_call",
