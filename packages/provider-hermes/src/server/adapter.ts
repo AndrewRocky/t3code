@@ -246,11 +246,17 @@ function makeHermesAcpAdapterFlavor(
     // Hermes enforces every mode natively, so every request it sends reaches the user.
     permissionDisposition: () => "ask",
     approvalOptions: hermesApprovalOptions,
+    // Hermes words its refusals for the user (a lost turn names its `/discard` command); only its
+    // machine-readable prefix is dropped.
     promptFailure: (cause) =>
       makeProviderFailure({
         cause,
         ...(isAcpRequestError(cause)
-          ? { message: cause.errorMessage, code: String(cause.code), class: "provider_error" }
+          ? {
+              message: cause.errorMessage.replace(/^unknown_execution:\s*/u, ""),
+              code: String(cause.code),
+              class: "provider_error",
+            }
           : { class: "provider_error" }),
       }),
     registerExtensions: ({ runtime, finishSubagent }) =>
