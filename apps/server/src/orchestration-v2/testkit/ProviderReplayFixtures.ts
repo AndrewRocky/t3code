@@ -31,6 +31,7 @@ const DRIVERS_WITH_REPLAY_FIXTURE_FILES = new Set([
   "codex",
   "cursor",
   "grok",
+  "hermes",
   "muse",
   "opencode",
   "pi",
