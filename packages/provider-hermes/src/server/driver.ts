@@ -43,6 +43,7 @@ import { syncHermesCommandRules } from "./commandRules.ts";
 import { makeHermesDelegationWatcher, makeHermesLedgerReader } from "./delegations.ts";
 import { resolveHermesHomePath } from "./home.ts";
 import { HermesRuntimeRegistry } from "./runtime.ts";
+import { makeHermesAdmissionReader } from "./workState.ts";
 import {
   buildHermesModelsFromSessionModelState,
   buildInitialHermesProviderSnapshot,
@@ -174,15 +175,17 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Path.
 
     const registry = new HermesRuntimeRegistry();
     const hermesHome = yield* resolveHermesHomePath(settings, processEnv).pipe(provideFiles);
+    const stateDb = path.join(hermesHome, "state.db");
     const delegations = yield* makeHermesDelegationWatcher({
       registry,
-      readLedger: makeHermesLedgerReader(path.join(hermesHome, "state.db")),
+      readLedger: makeHermesLedgerReader(stateDb),
     });
 
     const orchestrationAdapter = yield* makeHermesAdapterV2Driver({
       registry,
       onDelegationDispatched: delegations.track,
       pendingBackgroundWork: delegations.pendingBackgroundWork,
+      readAdmissions: makeHermesAdmissionReader(stateDb),
       beforeSpawn: syncConfig,
       onModelsDiscovered: (modelState) =>
         publishCatalog(buildHermesModelsFromSessionModelState(modelState)),

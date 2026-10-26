@@ -234,6 +234,7 @@ import { assertTurnInterruptMidToolClaudeOutput } from "./turn_interrupt_mid_too
 import { assertTurnInterruptMidToolCodexOutput } from "./turn_interrupt_mid_tool/codex_output.ts";
 import { assertTurnInterruptMidToolCursorOutput } from "./turn_interrupt_mid_tool/cursor_output.ts";
 import { assertTurnInterruptMidToolFxOutput } from "./turn_interrupt_mid_tool/fx_output.ts";
+import { assertTurnInterruptMidToolHermesOutput } from "./turn_interrupt_mid_tool/hermes_output.ts";
 import {
   turnInterruptMidToolInput,
   turnInterruptMidToolKiroInput,
@@ -2013,6 +2014,15 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./turn_interrupt_mid_tool/pi_transcript.ndjson", import.meta.url),
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertTurnInterruptMidToolPiOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("hermes"),
+        transcriptFile: new URL(
+          "./turn_interrupt_mid_tool/hermes_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: HERMES_MODEL_SELECTION,
+        assertOutput: assertTurnInterruptMidToolHermesOutput,
       },
     ],
   },
