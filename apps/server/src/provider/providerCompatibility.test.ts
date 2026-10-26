@@ -79,6 +79,24 @@ describe("provider compatibility", () => {
     );
   });
 
+  it("keeps Hermes on the gateway viewer even when the remote manifest has no Hermes policy", () => {
+    // pingdotgg's manifest has no Hermes entry, so the bundled floor must survive a refresh.
+    const hermes = { ...provider, driver: ProviderDriverKind.make("hermes") };
+    for (const [version, expected] of [
+      ["0.22.2", "unsupported"],
+      ["0.22.3", "supported"],
+      ["0.23.0", "supported"],
+    ] as const) {
+      const advisory = applyProviderCompatibility(
+        { ...hermes, version },
+        [],
+        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+      ).compatibilityAdvisory;
+      assert.strictEqual(advisory?.status, expected, `Hermes ${version}`);
+      assert.strictEqual(advisory?.recommendedRange, ">=0.22.5");
+    }
+  });
+
   it("compares Cursor build dates without treating semver prereleases as stable", () => {
     const cursor = ProviderDriverKind.make("cursor");
     const cursorPolicy: ProviderCompatibilityPolicy = {
