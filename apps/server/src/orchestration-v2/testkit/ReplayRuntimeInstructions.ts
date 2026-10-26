@@ -15,6 +15,8 @@ export function materializeReplayTranscriptRuntimeInstructions(
           ? "acpRegistry"
           : runtime.driver === "fx"
             ? "fx"
+            : runtime.driver === "hermes"
+              ? "Hermes"
             : undefined;
   if (harness === undefined) return transcript;
   const instructions = buildRuntimeInstructions({ harness, model: runtime.model });

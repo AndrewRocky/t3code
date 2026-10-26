@@ -330,6 +330,11 @@ export const FX_MODEL_SELECTION = {
   model: "default",
 } satisfies ModelSelection;
 
+export const HERMES_MODEL_SELECTION = {
+  instanceId: ProviderInstanceId.make("hermes"),
+  model: "default",
+} satisfies ModelSelection;
+
 export const OPENCODE_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("opencode"),
   model: "openai/gpt-5.4-mini",
