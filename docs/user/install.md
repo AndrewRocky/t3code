@@ -163,6 +163,7 @@ computer.
 | Claude      | Install [Claude Code](https://claude.com/product/claude-code), then run `claude auth login`.                                                              |
 | Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                                                                                     |
 | Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                                                                                        |
+| Hermes      | Install [Hermes Agent](./providers-hermes.md#set-up-hermes) 0.22.3 or newer, then run `hermes model`.                                                     |
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                                                  |
 | Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                                                         |
 | Pi          | Install [Pi](./providers-pi.md#set-up-pi) with Node.js 22.19 or newer, then run `pi` and `/login`.                                                        |
@@ -196,7 +197,7 @@ their original values.
 
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md),
-[Antigravity](./providers-antigravity.md), [Pi](./providers-pi.md),
+[Antigravity](./providers-antigravity.md), [Hermes](./providers-hermes.md), [Pi](./providers-pi.md),
 [Muse Code](./providers-muse.md), and [fx](./providers-fx.md).
 
 ## Next steps

@@ -37,6 +37,10 @@ Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **
 file-change approvals offer **Allow all edits this session**. Its command approvals have no
 session-wide choice, because Grok would remember that command for the whole project.
 
+Hermes offers no **Auto**. A Hermes thread already set to it runs in **Auto-accept edits**.
+**Full access** turns on Hermes' own YOLO mode for the thread, and Hermes can still ask about
+sensitive paths. See [Hermes permission modes](./providers-hermes.md#permission-modes).
+
 ACP Registry agents run their own tools in their own mode; T3 Code answers their approval requests
 by the permission mode. See [ACP Registry permissions](./providers-acp.md#permissions-and-terminals).
 
