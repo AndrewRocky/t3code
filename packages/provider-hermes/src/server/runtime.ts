@@ -48,6 +48,7 @@ const HERMES_BUSY_ERROR_CODE = -32603;
 const CONTROL_PROMPT_TIMEOUT = "15 seconds";
 
 export interface HermesDispatchedDelegation {
+  readonly threadId: string | undefined;
   readonly sessionId: string;
   readonly toolCallId: string;
   readonly dispatch: HermesDelegationDispatch;
@@ -259,6 +260,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
         });
         yield* (
           options.onDelegationDispatched?.({
+            threadId: options.threadId,
             sessionId: notification.sessionId,
             toolCallId: update.toolCallId,
             dispatch,
