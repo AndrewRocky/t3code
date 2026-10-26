@@ -337,7 +337,7 @@ function migrateLegacySourceControlSettings(
 }
 
 const HISTORY_RESTORED_DRIVERS: ReadonlySet<ProviderDriverKind> = new Set(
-  ["cursor", "grok", "opencode"].map((driver) => ProviderDriverKind.make(driver)),
+  ["cursor", "grok", "hermes", "opencode"].map((driver) => ProviderDriverKind.make(driver)),
 );
 
 function migrateLegacyProviderSettings(

@@ -1,1 +1,1 @@
-export { resolveHermesHomePath } from "./server/home.ts";
+export { HermesDriver, type HermesDriverEnv } from "./server/driver.ts";
