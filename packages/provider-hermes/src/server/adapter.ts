@@ -70,7 +70,7 @@ const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
  * copies only the head; Hermes' daemon can branch at a message, but not over
  * ACP.
  */
-export const HermesProviderCapabilitiesV2 = {
+const HermesProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
   sessions: {
     ...AcpProviderCapabilitiesV2.sessions,
@@ -185,7 +185,7 @@ export const spawnHermesRuntime = Effect.fn("HermesAdapter.spawnRuntime")(
   Effect.provideService(AgentScope, UNSCOPED_AGENT),
 );
 
-export function makeHermesAcpAdapterFlavor(
+function makeHermesAcpAdapterFlavor(
   options: HermesAdapterV2Options,
   registry: HermesRuntimeRegistry,
   services: { readonly fileSystem: FileSystem.FileSystem; readonly path: Path.Path },

@@ -6,7 +6,7 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
 import type { HermesSettings } from "../settings.ts";
 
-export const HERMES_HOME_ENV = "HERMES_HOME";
+const HERMES_HOME_ENV = "HERMES_HOME";
 
 /**
  * The `HERMES_HOME` the spawned CLI will see. It also selects the gateway
