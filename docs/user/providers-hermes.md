@@ -100,12 +100,30 @@ Images and videos Hermes shares with `MEDIA:` appear in the conversation.
 restarts, Hermes blocks the session until you discard it; send the `/discard`
 command Hermes names in its message.
 
+## Stopping Hermes
+
+Closing a connection does not stop Hermes; its background service finishes the turn
+regardless. So **Stop** keeps asking Hermes to stop until it confirms, and the turn
+stays running until then. If Hermes still has not confirmed after about a minute of
+retries, the turn stays running with the interrupt request shown; press **Stop**
+again to retry. Archiving a thread or quitting T3 Code also tries to stop a turn T3
+Code started.
+
+While a thread is connected to Hermes, T3 Code shows Hermes working whenever it is,
+including work T3 Code did not start, such as a message sent from another Hermes app
+or the results of delegated subtasks. A turn still running from before T3 Code
+restarted shows up when you next send a message in that thread. A message you send
+meanwhile waits for that work to finish. T3 Code cannot stop such work on this Hermes
+version, and **Stop** says so; it ends when Hermes finishes. Background terminal
+processes Hermes started keep running after any Stop.
+
 ## Delegated subtasks
 
 Hermes runs subtasks from `delegate_task` in the background. Each one appears in
 [agent work](./thread-sidebar.md#inspect-agent-work) and stays running until Hermes
-records its result, even after the turn that started it ends. Their progress is not
-reported until they finish.
+records its result, even after the turn that started it ends. When they finish,
+Hermes reads their results in a turn of its own, which appears in the thread. Their
+progress is not reported until they finish.
 
 ## Limits
 
