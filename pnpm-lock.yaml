@@ -573,6 +573,9 @@ importers:
       '@t3tools/provider-grok':
         specifier: workspace:*
         version: link:../../packages/provider-grok
+      '@t3tools/provider-hermes':
+        specifier: workspace:*
+        version: link:../../packages/provider-hermes
       '@t3tools/provider-muse':
         specifier: workspace:*
         version: link:../../packages/provider-muse
@@ -853,6 +856,9 @@ importers:
       '@t3tools/provider-grok':
         specifier: workspace:*
         version: link:../../packages/provider-grok
+      '@t3tools/provider-hermes':
+        specifier: workspace:*
+        version: link:../../packages/provider-hermes
       '@t3tools/provider-muse':
         specifier: workspace:*
         version: link:../../packages/provider-muse
@@ -1031,6 +1037,9 @@ importers:
       '@t3tools/provider-grok':
         specifier: workspace:*
         version: link:../../packages/provider-grok
+      '@t3tools/provider-hermes':
+        specifier: workspace:*
+        version: link:../../packages/provider-hermes
       '@t3tools/provider-muse':
         specifier: workspace:*
         version: link:../../packages/provider-muse
