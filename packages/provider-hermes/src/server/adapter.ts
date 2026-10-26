@@ -154,9 +154,9 @@ export interface HermesAdapterV2Options {
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
 }
 
-const spawnHermesRuntime = Effect.fn("HermesAdapter.spawnRuntime")(
+export const spawnHermesRuntime = Effect.fn("HermesAdapter.spawnRuntime")(
   function* (
-    options: HermesAdapterV2Options,
+    options: Pick<HermesAdapterV2Options, "settings" | "environment" | "homeDirectory">,
     { runtimePolicy: _runtimePolicy, ...input }: AcpAdapterV2RuntimeInput,
     launch: { readonly yolo: boolean },
   ) {
