@@ -17,7 +17,9 @@ export function materializeReplayTranscriptRuntimeInstructions(
             ? "acpRegistry"
             : runtime.driver === "fx"
               ? "fx"
-              : undefined;
+              : runtime.driver === "hermes"
+                ? "Hermes"
+                : undefined;
   if (harness === undefined) return transcript;
   const instructions = buildRuntimeInstructions({ harness, model: runtime.model });
   // The notes name the model, so each prompt expects the ones for its session's current model.
