@@ -19,7 +19,7 @@ const MAX_TEXT_CHARS = 400;
 const MAX_CHILDREN = 64;
 
 /** Prefix of the synthetic per-child tool call ids the runtime decorator injects. */
-export const HERMES_CHILD_TOOL_CALL_PREFIX = "hermes-subagent:";
+const HERMES_CHILD_TOOL_CALL_PREFIX = "hermes-subagent:";
 
 /** `_meta` key on a synthetic child tool call; nothing outside this package reads it. */
 export const HERMES_CHILD_META_KEY = "t3HermesSubagent";

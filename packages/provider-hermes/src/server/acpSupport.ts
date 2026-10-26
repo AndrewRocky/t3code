@@ -20,11 +20,11 @@ export const HERMES_DEFAULT_MODEL_SLUG = "default";
  * Read by the gateway only on `session.create`, as a launch flag; a load or
  * resume keeps the session's frozen value (`hermes_cli/gateway_chat.py`).
  */
-export const HERMES_YOLO_MODE_ENV = "HERMES_YOLO_MODE";
+const HERMES_YOLO_MODE_ENV = "HERMES_YOLO_MODE";
 
-export const HERMES_MODE_DEFAULT = "default";
-export const HERMES_MODE_ACCEPT_EDITS = "accept_edits";
-export const HERMES_MODE_DONT_ASK = "dont_ask";
+const HERMES_MODE_DEFAULT = "default";
+const HERMES_MODE_ACCEPT_EDITS = "accept_edits";
+const HERMES_MODE_DONT_ASK = "dont_ask";
 
 /**
  * Hermes v0.23 publishes the edit modes as an `edit_approval_policy` config
@@ -45,7 +45,7 @@ export const HERMES_SUPPORTED_RUNTIME_MODES = [
   "full-access",
 ] as const satisfies ReadonlyArray<RuntimeMode>;
 
-export function hermesAcpSpawnArgs(): ReadonlyArray<string> {
+function hermesAcpSpawnArgs(): ReadonlyArray<string> {
   return ["acp"];
 }
 

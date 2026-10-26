@@ -3,8 +3,4 @@ export {
   HERMES_PROVIDER,
   makeHermesAdapterV2,
   spawnHermesRuntime,
-  type HermesAdapterV2Options,
 } from "./server/adapter.ts";
-export { HermesRuntimeRegistry } from "./server/runtime.ts";
-export { buildInitialHermesProviderSnapshot, checkHermesProviderStatus } from "./server/status.ts";
-export { makeHermesTextGeneration } from "./server/textGeneration.ts";
