@@ -11,6 +11,7 @@ import { modelShortName } from "@t3tools/provider-core/modelShortName";
 import { cursorClient } from "@t3tools/provider-cursor/client";
 import { fxClient } from "@t3tools/provider-fx/client";
 import { grokClient } from "@t3tools/provider-grok/client";
+import { hermesClient } from "@t3tools/provider-hermes/client";
 import { kiroClient } from "@t3tools/provider-kiro/client";
 import { museClient } from "@t3tools/provider-muse/client";
 import { openCodeClient } from "@t3tools/provider-opencode/client";
@@ -34,6 +35,7 @@ export const providerClients = makeProviderClientRegistry([
   cursorClient,
   grokClient,
   fxClient,
+  hermesClient,
   openCodeClient,
   {
     driverKind: ProviderDriverKind.make("antigravity"),

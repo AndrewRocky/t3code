@@ -8,6 +8,7 @@ import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
 import { CursorDriver, type CursorDriverEnv } from "@t3tools/provider-cursor/server";
 import { FxDriver, type FxDriverEnv } from "@t3tools/provider-fx/server";
 import { GrokDriver, type GrokDriverEnv } from "@t3tools/provider-grok/server";
+import { HermesDriver, type HermesDriverEnv } from "@t3tools/provider-hermes/server";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "@t3tools/provider-opencode/server";
 import { MuseDriver, type MuseDriverEnv } from "@t3tools/provider-muse/server";
 import { PiDriver, type PiDriverEnv } from "@t3tools/provider-pi/server";
@@ -26,6 +27,7 @@ export type BuiltInDriversEnv =
   | FxDriverEnv
   | GrokDriverEnv
   | KiroDriverEnv
+  | HermesDriverEnv
   | OpenCodeDriverEnv
   | PiDriverEnv
   | MuseDriverEnv;
@@ -36,6 +38,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   CursorDriver,
   GrokDriver,
   FxDriver,
+  HermesDriver,
   OpenCodeDriver,
   AntigravityDriver,
   KiroDriver,
