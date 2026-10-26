@@ -20,7 +20,6 @@ import {
   hermesChildNativeTaskId,
   hermesChildToolCallId,
   hermesDelegationIdForChild,
-  hermesTitleNamesDelegation,
   parseHermesDelegationHandle,
 } from "./subagents.ts";
 
@@ -404,5 +403,3 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
   };
   return handle;
 });
-
-export { hermesTitleNamesDelegation };
