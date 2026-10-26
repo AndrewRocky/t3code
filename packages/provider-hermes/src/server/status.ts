@@ -86,7 +86,8 @@ const ACP_EXTRA_INSTALL_HINT =
  * Hermes intercepts these itself (`acp_adapter/gateway_session_meta.py`).
  * Withheld: `model` (T3's own `/model` opens the picker), `steer` and `queue`
  * (the composer does both), and `undo`, `retry` and `reset`, which rewrite
- * Hermes' history behind T3's thread.
+ * Hermes' history behind T3's thread. `discard` is not advertised, but it is
+ * the way out Hermes names when a lost turn blocks the session.
  */
 const HERMES_SLASH_COMMANDS: ReadonlyArray<ServerProviderSlashCommand> = [
   COMPACT_SLASH_COMMAND,
@@ -97,6 +98,11 @@ const HERMES_SLASH_COMMANDS: ReadonlyArray<ServerProviderSlashCommand> = [
   { name: "status", description: "Show session, model, token, and context info" },
   { name: "version", description: "Show Hermes version" },
   { name: "title", description: "Show or set the session title", input: { hint: "new title" } },
+  {
+    name: "discard",
+    description: "Discard a lost turn that blocks the session",
+    input: { hint: "lost turn id" },
+  },
 ];
 
 /** An empty fallback, not an invented default: only a configured Hermes knows its models. */

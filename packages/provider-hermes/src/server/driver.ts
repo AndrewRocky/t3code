@@ -40,6 +40,9 @@ import { HermesSettings } from "../settings.ts";
 import { buildHermesAcpSpawnInput, HERMES_DRIVER_KIND } from "./acpSupport.ts";
 import { type HermesAdapterV2DriverEnv, makeHermesAdapterV2Driver } from "./adapter.ts";
 import { syncHermesCommandRules } from "./commandRules.ts";
+import { makeHermesDelegationWatcher, makeHermesLedgerReader } from "./delegations.ts";
+import { resolveHermesHomePath } from "./home.ts";
+import { HermesRuntimeRegistry } from "./runtime.ts";
 import {
   buildHermesModelsFromSessionModelState,
   buildInitialHermesProviderSnapshot,
@@ -169,7 +172,17 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Path.
         syncHermesWorktreeTrust(settings, processEnv, cwd),
       ]).pipe(Effect.asVoid, provideFiles);
 
+    const registry = new HermesRuntimeRegistry();
+    const hermesHome = yield* resolveHermesHomePath(settings, processEnv).pipe(provideFiles);
+    const delegations = yield* makeHermesDelegationWatcher({
+      registry,
+      readLedger: makeHermesLedgerReader(path.join(hermesHome, "state.db")),
+    });
+
     const orchestrationAdapter = yield* makeHermesAdapterV2Driver({
+      registry,
+      onDelegationDispatched: delegations.track,
+      pendingBackgroundWork: delegations.pendingBackgroundWork,
       beforeSpawn: syncConfig,
       onModelsDiscovered: (modelState) =>
         publishCatalog(buildHermesModelsFromSessionModelState(modelState)),
