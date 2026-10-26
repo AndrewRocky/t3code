@@ -135,6 +135,7 @@ export interface HermesAdapterV2Options {
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
   readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
   readonly onDelegationDispatched?: (delegation: HermesDispatchedDelegation) => Effect.Effect<void>;
+  readonly pendingBackgroundWork?: (threadId: string) => Effect.Effect<boolean>;
   /** Runs before each `hermes acp` spawn: the daemon reads `config.yaml` when a session starts. */
   readonly beforeSpawn?: (cwd: string) => Effect.Effect<void>;
   /** The live model catalog from each session Hermes opens. */
@@ -272,7 +273,12 @@ export const makeHermesAdapterV2 = Effect.fn("makeHermesAdapterV2")(function* (
       : { continuationRequests: options.continuationRequests }),
     ...(options.testHooks === undefined ? {} : { testHooks: options.testHooks }),
   });
-  return decorateHermesAdapter(base, { registry });
+  return decorateHermesAdapter(base, {
+    registry,
+    ...(options.pendingBackgroundWork === undefined
+      ? {}
+      : { pendingBackgroundWork: options.pendingBackgroundWork }),
+  });
 });
 
 export type HermesAdapterV2DriverEnv =
@@ -288,7 +294,11 @@ export type HermesAdapterV2DriverEnv =
 export const makeHermesAdapterV2Driver = (
   extra: Pick<
     HermesAdapterV2Options,
-    "registry" | "onDelegationDispatched" | "beforeSpawn" | "onModelsDiscovered"
+    | "registry"
+    | "onDelegationDispatched"
+    | "pendingBackgroundWork"
+    | "beforeSpawn"
+    | "onModelsDiscovered"
   > = {},
 ): ProviderAdapterDriver<HermesSettings, HermesAdapterV2DriverEnv> => ({
   driverKind: HERMES_DRIVER_KIND,
