@@ -20,6 +20,9 @@ type Session = ProviderAdapter.ProviderAdapterV2SessionRuntime;
 
 const STEER_ACK_PREFIX = "⏩";
 
+/** The launcher stops the server five seconds after asking; T3's own turn gets most of that. */
+const RELEASE_STOP_BOUND = "3 seconds";
+
 /** Hermes' own checks still ask under YOLO (sensitive paths, plugin approvals, model switches). */
 const FULL_ACCESS_PROVIDER_CHECK_REASON =
   "Full access lets Hermes run commands without asking, but Hermes still asks before touching sensitive paths and for its own approval checks.";
@@ -42,6 +45,23 @@ function stampFullAccessApproval(
     reason: item.reason ?? FULL_ACCESS_PROVIDER_CHECK_REASON,
   };
 }
+
+const interruptRefused = (input: ProviderAdapter.ProviderAdapterV2InterruptInput) =>
+  new ProviderAdapter.ProviderAdapterInterruptError({
+    driver: HERMES_DRIVER_KIND,
+    providerThreadId: input.providerThread.id,
+    providerTurnId: input.providerTurnId,
+    cause: new Error(
+      "Hermes is finishing a turn this T3 Code session did not start, which T3 Code cannot stop on this Hermes version. It ends when Hermes finishes.",
+    ),
+  });
+
+const rollbackRefused = (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) =>
+  new ProviderAdapter.ProviderAdapterRollbackThreadError({
+    driver: HERMES_DRIVER_KIND,
+    providerThreadId: input.providerThread.id,
+    cause: new Error("Hermes is still working on this thread. Try again once it has finished."),
+  });
 
 const steerFailure = (input: ProviderAdapter.ProviderAdapterV2SteerInput, detail: string) =>
   new ProviderAdapter.ProviderAdapterSteerRunError({
@@ -88,7 +108,9 @@ function decorateSession(
    */
   const steerTurn: Session["steerTurn"] = Effect.fn("HermesSession.steerTurn")(function* (input) {
     const handle = options.registry.get(input.threadId);
-    if (handle === undefined || !handle.ownPromptOpen()) {
+    // With other prompts queued, T3's own may be among them rather than running.
+    const queued = handle?.ownPromptOpen() === true ? yield* handle.queuedAdmissions() : undefined;
+    if (handle === undefined || !handle.ownPromptOpen() || (queued ?? 0) > 0) {
       return yield* steerFailure(
         input,
         "Hermes has not started this turn yet, so it cannot be steered. Send the message as a follow-up instead.",
@@ -105,6 +127,34 @@ function decorateSession(
     }
   });
 
+  /** Stop reaches only this viewer's own turn; anything else would be reported stopped and keep running. */
+  const interruptTurn: Session["interruptTurn"] = Effect.fn("HermesSession.interruptTurn")(
+    function* (input) {
+      const handle = options.registry.get(threadId);
+      if (handle !== undefined && (yield* handle.workState()) === "foreign") {
+        return yield* interruptRefused(input);
+      }
+      return yield* session.interruptTurn(input);
+    },
+  );
+
+  /** A reset rollback replaces the viewer, and the old session would keep running. */
+  const rollbackThread: Session["rollbackThread"] = Effect.fn("HermesSession.rollbackThread")(
+    function* (input) {
+      const handle = options.registry.get(threadId);
+      const state = handle === undefined ? "idle" : yield* handle.workState();
+      if (state === "own" || state === "foreign") return yield* rollbackRefused(input);
+      return yield* session.rollbackThread(input);
+    },
+  );
+
+  const hermesBusy = Effect.suspend(() => {
+    const handle = options.registry.get(threadId);
+    return handle === undefined
+      ? Effect.succeed(false)
+      : handle.workState().pipe(Effect.map((state) => state === "own" || state === "foreign"));
+  });
+
   return {
     ...session,
     events: session.events.pipe(
@@ -114,21 +164,47 @@ function decorateSession(
           : event,
       ),
     ),
-    ...(options.pendingBackgroundWork === undefined
-      ? {}
-      : {
-          hasPendingBackgroundWork: Effect.gen(function* () {
-            const base = session.hasPendingBackgroundWork
-              ? yield* session.hasPendingBackgroundWork
-              : false;
-            return base || (yield* options.pendingBackgroundWork!(threadId));
-          }),
-        }),
+    // The idle reaper would otherwise kill a viewer whose session Hermes is still running.
+    hasPendingBackgroundWork: Effect.gen(function* () {
+      if (
+        session.hasPendingBackgroundWork !== undefined &&
+        (yield* session.hasPendingBackgroundWork)
+      )
+        return true;
+      if (
+        options.pendingBackgroundWork !== undefined &&
+        (yield* options.pendingBackgroundWork(threadId))
+      )
+        return true;
+      return yield* hermesBusy;
+    }),
     startTurn: (input) =>
       applyRuntimeMode(input.runtimePolicy).pipe(Effect.andThen(session.startTurn(input))),
     steerTurn,
+    interruptTurn,
+    rollbackThread,
   };
 }
+
+/**
+ * Releasing a session closes the viewer, which stops nothing: Hermes would
+ * finish T3's turn with nobody watching. Archive, errors and shutdown stop it
+ * first, within a budget, since T3 cannot hold a release open.
+ */
+const stopBeforeRelease = (threadId: string, registry: HermesRuntimeRegistry) =>
+  Effect.suspend(() => {
+    const handle = registry.get(threadId);
+    if (handle === undefined || !handle.ownPromptOpen()) return Effect.void;
+    return handle.stopOwnTurn(RELEASE_STOP_BOUND).pipe(
+      Effect.flatMap((stopped) =>
+        stopped
+          ? Effect.void
+          : Effect.logWarning("Hermes was still working when T3 Code released its session.", {
+              threadId,
+            }),
+      ),
+    );
+  });
 
 export function decorateHermesAdapter(
   adapter: Adapter,
@@ -137,8 +213,12 @@ export function decorateHermesAdapter(
   return {
     ...adapter,
     openSession: (input) =>
-      adapter
-        .openSession(input)
-        .pipe(Effect.map((session) => decorateSession(session, input, options))),
+      adapter.openSession(input).pipe(
+        // Added after the base session's own finalizers, so it runs before they close the viewer.
+        Effect.tap(() =>
+          Effect.addFinalizer(() => stopBeforeRelease(input.threadId, options.registry)),
+        ),
+        Effect.map((session) => decorateSession(session, input, options)),
+      ),
   };
 }

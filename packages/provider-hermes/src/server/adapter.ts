@@ -55,6 +55,7 @@ import {
   makeHermesRuntime,
 } from "./runtime.ts";
 import { decorateHermesAdapter } from "./session.ts";
+import type { HermesAdmissionReader } from "./workState.ts";
 import { discoverHermesSkills } from "./skills.ts";
 import { extractHermesSubagentUpdate } from "./subagents.ts";
 import { normalizeHermesToolCall } from "./toolCalls.ts";
@@ -136,6 +137,8 @@ export interface HermesAdapterV2Options {
   readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
   readonly onDelegationDispatched?: (delegation: HermesDispatchedDelegation) => Effect.Effect<void>;
   readonly pendingBackgroundWork?: (threadId: string) => Effect.Effect<boolean>;
+  /** Hermes' admission FIFO; without it, work T3 did not start settles when Hermes goes quiet. */
+  readonly readAdmissions?: HermesAdmissionReader;
   /** Runs before each `hermes acp` spawn: the daemon reads `config.yaml` when a session starts. */
   readonly beforeSpawn?: (cwd: string) => Effect.Effect<void>;
   /** The live model catalog from each session Hermes opens. */
@@ -201,6 +204,9 @@ function makeHermesAcpAdapterFlavor(
     runtimeHarness: "Hermes",
     capabilities: HermesProviderCapabilitiesV2,
     interruptPromptOnCancel: false,
+    // The runtime decorator reports Hermes' work state from its admission FIFO (S1 upstream would
+    // let a v1 agent opt in without the faked protocol version).
+    followAgentWorkState: true,
     supportsCompaction: true,
     customModels: options.settings.customModels.map((model) =>
       typeof model === "string" ? model : model.slug,
@@ -229,6 +235,9 @@ function makeHermesAcpAdapterFlavor(
         ...(options.onDelegationDispatched === undefined
           ? {}
           : { onDelegationDispatched: options.onDelegationDispatched }),
+        ...(options.readAdmissions === undefined ? {} : { readAdmissions: options.readAdmissions }),
+        // The adapter follows work state only when it can start continuation runs.
+        followWorkState: options.continuationRequests !== undefined,
       });
       yield* registry.register(handle);
       yield* Effect.addFinalizer(() => registry.unregister(handle));
@@ -297,6 +306,7 @@ export const makeHermesAdapterV2Driver = (
     | "registry"
     | "onDelegationDispatched"
     | "pendingBackgroundWork"
+    | "readAdmissions"
     | "beforeSpawn"
     | "onModelsDiscovered"
   > = {},
