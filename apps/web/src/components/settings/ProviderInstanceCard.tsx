@@ -65,6 +65,7 @@ import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { HermesCommandRulesSection } from "./HermesCommandRulesSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -142,6 +143,12 @@ function readConfigString(config: unknown, key: string): string | null {
   if (config === null || typeof config !== "object") return null;
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readConfigStringArray(config: unknown, key: string): ReadonlyArray<string> {
+  if (config === null || typeof config !== "object") return [];
+  const value = (config as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
 }
 
 /** Preserve explicit empty arrays/objects; clearing a custom list differs from selecting driver defaults. */
@@ -755,6 +762,14 @@ export function ProviderInstanceCard({
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   });
 
+  const updateConfigList = (key: string) => (next: ReadonlyArray<string>) => {
+    const { config: _omit, ...rest } = instance;
+    onUpdate({
+      ...rest,
+      config: nextConfigBlobWithValue(instance.config, key, [...next]),
+    } as ProviderInstanceConfig);
+  };
+
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
     const { environment: _omit, ...rest } = instance;
@@ -1213,6 +1228,25 @@ export function ProviderInstanceCard({
           className={readOnly ? "opacity-50 select-none" : undefined}
         >
           {runtimeFields}
+        </SettingsSection>
+      ) : null}
+
+      {instance.driver === "hermes" ? (
+        <SettingsSection
+          title="Command rules"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <div className="px-3 py-3 sm:px-4">
+            <HermesCommandRulesSection
+              instanceId={instanceId}
+              commandAllowlist={readConfigStringArray(instance.config, "commandAllowlist")}
+              commandDenylist={readConfigStringArray(instance.config, "commandDenylist")}
+              onCommandAllowlistChange={updateConfigList("commandAllowlist")}
+              onCommandDenylistChange={updateConfigList("commandDenylist")}
+            />
+          </div>
         </SettingsSection>
       ) : null}
 
