@@ -161,6 +161,17 @@ export function hermesAuthFromInitialize(
   return initialized === undefined ? { status: "unknown" } : { status: "unauthenticated" };
 }
 
+/** The last line Hermes printed, so a failed probe says why instead of only that it failed. */
+function lastOutputLine(output: { readonly stdout: string; readonly stderr: string }): string {
+  const line = `${output.stderr}\n${output.stdout}`
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .at(-1);
+  if (line === undefined) return "";
+  return `: ${line.length <= 200 ? line : `${line.slice(0, 199)}…`}`;
+}
+
 const runHermesCommand = Effect.fn("HermesProviderStatus.runHermesCommand")(function* (
   settings: Pick<HermesSettings, "binaryPath">,
   args: ReadonlyArray<string>,
@@ -334,7 +345,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       auth: { status: "unknown" },
       message: Option.isNone(versionResult.success)
         ? "Hermes is installed but timed out on `hermes acp --version`."
-        : "Hermes is installed but `hermes acp --version` failed.",
+        : `Hermes is installed but \`hermes acp --version\` failed${lastOutputLine(versionResult.success.value)}`,
     });
   }
   const versionOutput = versionResult.success.value;
@@ -363,7 +374,10 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       version,
       status: "error",
       auth: { status: "unknown" },
-      message: ACP_EXTRA_INSTALL_HINT,
+      message:
+        Result.isSuccess(checkResult) && Option.isSome(checkResult.success)
+          ? `${ACP_EXTRA_INSTALL_HINT} (\`hermes acp --check\`${lastOutputLine(checkResult.success.value)})`
+          : ACP_EXTRA_INSTALL_HINT,
     });
   }
 
