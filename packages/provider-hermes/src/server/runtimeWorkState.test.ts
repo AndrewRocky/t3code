@@ -128,6 +128,29 @@ describe("Hermes Stop", () => {
     }),
   );
 
+  it.effect("leaves the tool a Stop cut short open instead of failed", () =>
+    Effect.gen(function* () {
+      const failedTool: Update = {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-1",
+        status: "failed",
+      };
+      const fake = yield* setup({});
+      yield* fake.handle.runtime.start();
+      yield* fake.startPrompt();
+      yield* Queue.take(fake.promptStarted);
+      yield* fake.emit(failedTool);
+      expect(yield* Queue.take(fake.delivered)).toMatchObject({ status: "failed" });
+
+      const stop = yield* fake.handle.runtime.cancel.pipe(Effect.forkChild);
+      yield* Queue.take(fake.cancels);
+      yield* fake.emit(failedTool);
+      expect(yield* Queue.take(fake.delivered)).toMatchObject({ status: "in_progress" });
+      yield* Deferred.succeed(fake.promptReturn, { stopReason: "cancelled" });
+      yield* Fiber.join(stop);
+    }),
+  );
+
   it.effect("refuses to close the session over work another client started", () =>
     Effect.gen(function* () {
       const busy = yield* setup({ admissions: [BUSY] });
