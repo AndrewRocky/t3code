@@ -55,6 +55,7 @@ import { assertMessageSteeringOutput } from "./message_steering/codex_output.ts"
 import { assertCursorMessageSteeringOutput } from "./message_steering/cursor_output.ts";
 import { assertGrokMessageSteeringOutput } from "./message_steering/grok_output.ts";
 import { messageSteeringInput } from "./message_steering/input.ts";
+import { assertHermesMessageSteeringOutput } from "./message_steering/hermes_output.ts";
 import { assertPiMessageSteeringOutput } from "./message_steering/pi_output.ts";
 import { MUSE_PERMISSION_DECLINED_FILE, musePermissionInput } from "./muse_permission/input.ts";
 import { assertMusePermissionOutput } from "./muse_permission/output.ts";
@@ -1281,6 +1282,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: MUSE_MODEL_SELECTION,
         assertOutput: assertMuseMultiTurnOutput,
       },
+      {
+        driver: ProviderDriverKind.make("hermes"),
+        transcriptFile: new URL("./multi_turn/hermes_transcript.ndjson", import.meta.url),
+        modelSelection: HERMES_MODEL_SELECTION,
+        assertOutput: assertMultiTurnOutput,
+      },
     ],
   },
   {
@@ -1570,6 +1577,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./message_steering/pi_transcript.ndjson", import.meta.url),
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiMessageSteeringOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("hermes"),
+        transcriptFile: new URL("./message_steering/hermes_transcript.ndjson", import.meta.url),
+        modelSelection: HERMES_MODEL_SELECTION,
+        assertOutput: assertHermesMessageSteeringOutput,
       },
     ],
   },

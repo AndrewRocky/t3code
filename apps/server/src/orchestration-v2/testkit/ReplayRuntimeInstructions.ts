@@ -49,6 +49,10 @@ export function materializeReplayTranscriptRuntimeInstructions(
       ) {
         const prompt: ReadonlyArray<unknown> = frame.params.prompt;
         const lastPart = prompt.at(-1);
+        // Hermes control prompts (`/steer`, `/yolo`) go out as the bare command.
+        if (runtime.driver === "hermes" && prompt.length === 1 && isSlashCommand(lastPart)) {
+          return entry;
+        }
         if (
           typeof lastPart === "object" &&
           lastPart !== null &&
@@ -70,4 +74,16 @@ export function materializeReplayTranscriptRuntimeInstructions(
       return entry;
     }),
   };
+}
+
+function isSlashCommand(part: unknown): boolean {
+  return (
+    typeof part === "object" &&
+    part !== null &&
+    "type" in part &&
+    part.type === "text" &&
+    "text" in part &&
+    typeof part.text === "string" &&
+    part.text.startsWith("/")
+  );
 }
