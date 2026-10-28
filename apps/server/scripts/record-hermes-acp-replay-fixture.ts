@@ -186,6 +186,21 @@ function frameLabel(kind: string, method: string, params: unknown): string {
   return `${kind}:${method}${updateType}`;
 }
 
+const HERMES_WAKE_LABEL_PREFIX = "hermes-wake-";
+
+const HERMES_WORK_UPDATES = new Set([
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "plan",
+]);
+
+function isHermesWorkUpdate(params: unknown): boolean {
+  const update = isRecord(params) && isRecord(params.update) ? params.update : undefined;
+  return typeof update?.sessionUpdate === "string" && HERMES_WORK_UPDATES.has(update.sessionUpdate);
+}
+
 function wireToEntries(wire: ReadonlyArray<WireMessage>): {
   readonly entries: Array<ProviderReplayEntry>;
   readonly droppedFrames: number;
@@ -194,6 +209,10 @@ function wireToEntries(wire: ReadonlyArray<WireMessage>): {
   const t3Requests = new Map<string, string>();
   const agentRequests = new Map<string, string>();
   let droppedFrames = 0;
+  let openPrompts = 0;
+  let promptsSent = 0;
+  let wakes = 0;
+  let inWake = false;
   for (const { direction, message } of wire) {
     const type = direction === "outgoing" ? "expect_outbound" : "emit_inbound";
     if (typeof message.method === "string") {
@@ -205,9 +224,28 @@ function wireToEntries(wire: ReadonlyArray<WireMessage>): {
         );
       }
       const kind = isRequest ? "request" : "notification";
+      if (isRequest && direction === "outgoing" && message.method === "session/prompt") {
+        openPrompts += 1;
+        promptsSent += 1;
+        inWake = false;
+      }
+      // A turn Hermes starts on its own (a delegation result) is gated under a
+      // label of its own, so a fixture can release it once the root run settled.
+      const startsWake =
+        !inWake &&
+        promptsSent > 0 &&
+        openPrompts === 0 &&
+        direction === "incoming" &&
+        isHermesWorkUpdate(message.params);
+      if (startsWake) {
+        inWake = true;
+        wakes += 1;
+      }
       entries.push({
         type,
-        label: frameLabel(kind, message.method, message.params),
+        label: startsWake
+          ? `${HERMES_WAKE_LABEL_PREFIX}${wakes}`
+          : frameLabel(kind, message.method, message.params),
         frame: {
           kind,
           method: message.method,
@@ -223,6 +261,7 @@ function wireToEntries(wire: ReadonlyArray<WireMessage>): {
       continue;
     }
     pending.delete(String(message.id));
+    if (direction === "incoming" && method === "session/prompt") openPrompts -= 1;
     entries.push({
       type,
       label: `response:${method}`,
