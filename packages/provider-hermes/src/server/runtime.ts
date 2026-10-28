@@ -62,6 +62,8 @@ const CLOSE_STOP_BOUND: Duration.Input = "9 seconds";
 const FOREIGN_POLL_INTERVAL = "1 second";
 /** With no readable store, work T3 did not start counts as done once Hermes goes quiet. */
 const FOREIGN_QUIET_MS = 5_000;
+/** The quiet plus one poll: the latest a quiet settle can land. */
+const FOREIGN_QUIET_SETTLE: Duration.Input = `${FOREIGN_QUIET_MS + 1_000} millis`;
 
 /**
  * A load carries T3's freshly issued MCP credential, which Hermes can rebind
@@ -108,6 +110,12 @@ export interface HermesRuntimeOptions {
    */
   readonly followWorkState?: boolean;
   readonly stopBound?: Duration.Input;
+  /**
+   * Called with the quiet that settles work T3 did not start, each time a
+   * frame of it arrives and no admission reader can say when it ends. Replay
+   * advances its clock by exactly that.
+   */
+  readonly onForeignQuietArmed?: (quiet: Duration.Input) => Effect.Effect<void>;
 }
 
 /** What the session decorator and the package services reach a live runtime through. */
@@ -417,6 +425,9 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
       if (followWorkState && openPrompts === 0 && notification.sessionId === sessionId) {
         if (!foreignActive) yield* beginForeignWork(notification.sessionId);
         lastWorkFrameAt = yield* Clock.currentTimeMillis;
+        if (options.readAdmissions === undefined) {
+          yield* options.onForeignQuietArmed?.(FOREIGN_QUIET_SETTLE) ?? Effect.void;
+        }
       }
     }
     if (update.sessionUpdate === "agent_message_chunk") {

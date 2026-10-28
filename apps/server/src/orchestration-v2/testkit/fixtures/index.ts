@@ -44,6 +44,8 @@ import { grokBackgroundBashFastWakeInput } from "./grok_background_bash_fast_wak
 import { assertGrokBackgroundBashFastWakeOutput } from "./grok_background_bash_fast_wake/output.ts";
 import { grokBackgroundSubagentInput } from "./grok_background_subagent/input.ts";
 import { assertGrokBackgroundSubagentOutput } from "./grok_background_subagent/output.ts";
+import { assertHermesBackgroundSubagentOutput } from "./hermes_background_subagent/hermes_output.ts";
+import { hermesBackgroundSubagentInput } from "./hermes_background_subagent/input.ts";
 import { grokMonitorInput } from "./grok_monitor/input.ts";
 import { assertGrokMonitorOutput } from "./grok_monitor/output.ts";
 import { grokPromptErrorInput } from "./grok_prompt_error/input.ts";
@@ -541,6 +543,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: GROK_MODEL_SELECTION,
         runContinuationWorker: true,
         assertOutput: assertGrokBackgroundSubagentOutput,
+      },
+    ],
+  },
+  {
+    name: "hermes_background_subagent",
+    buildInput: hermesBackgroundSubagentInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("hermes"),
+        transcriptFile: new URL(
+          "./hermes_background_subagent/hermes_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: HERMES_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertHermesBackgroundSubagentOutput,
       },
     ],
   },

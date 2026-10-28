@@ -239,6 +239,9 @@ function makeHermesAcpAdapterFlavor(
         ...(options.readAdmissions === undefined ? {} : { readAdmissions: options.readAdmissions }),
         // The adapter follows work state only when it can start continuation runs.
         followWorkState: options.continuationRequests !== undefined,
+        ...(options.testHooks?.onDeferredFinalizeScheduled === undefined
+          ? {}
+          : { onForeignQuietArmed: options.testHooks.onDeferredFinalizeScheduled }),
       });
       yield* registry.register(handle);
       yield* Effect.addFinalizer(() => registry.unregister(handle));
