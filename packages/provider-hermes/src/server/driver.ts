@@ -41,7 +41,7 @@ import { buildHermesAcpSpawnInput, HERMES_DRIVER_KIND } from "./acpSupport.ts";
 import { type HermesAdapterV2DriverEnv, makeHermesAdapterV2Driver } from "./adapter.ts";
 import { syncHermesCommandRules } from "./commandRules.ts";
 import { makeHermesDelegationWatcher, makeHermesLedgerReader } from "./delegations.ts";
-import { resolveHermesHomePath } from "./home.ts";
+import { buildHermesEnvironment, resolveHermesHomePath } from "./home.ts";
 import { HermesRuntimeRegistry } from "./runtime.ts";
 import { makeHermesAdmissionReader } from "./workState.ts";
 import {
@@ -101,8 +101,14 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Path.
     const path = yield* Path.Path;
     const host = yield* ProviderHost.ProviderHost;
     const homeDirectory = yield* HostProcess.HomeDirectory;
-    const processEnv = yield* mergeProviderInstanceEnvironment(environment);
     const settings = { ...config, enabled } satisfies HermesSettings;
+    // Every command the driver runs (probe, skills listing, text generation) must reach the
+    // configured Hermes home: a binary installed under it may not run against another one.
+    const processEnv = buildHermesEnvironment({
+      config: settings,
+      environment: yield* mergeProviderInstanceEnvironment(environment),
+      homeDirectory,
+    });
     const provideFiles = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
