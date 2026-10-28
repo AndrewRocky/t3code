@@ -48,6 +48,7 @@ import {
   hermesYoloForMode,
   resolveHermesAcpBaseModelId,
 } from "./acpSupport.ts";
+import { buildHermesEnvironment } from "./home.ts";
 import { hostHermesMediaTagOptions, type HermesMediaTagOptions } from "./mediaTags.ts";
 import {
   type HermesDispatchedDelegation,
@@ -331,7 +332,12 @@ export const makeHermesAdapterV2Driver = (
       return yield* makeHermesAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        // Skills listed for a turn's `$skill` directive come from the configured Hermes home.
+        environment: buildHermesEnvironment({
+          config: input.config,
+          environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+          homeDirectory,
+        }),
         homeDirectory,
         selfInvocation,
         continuationRequests,
