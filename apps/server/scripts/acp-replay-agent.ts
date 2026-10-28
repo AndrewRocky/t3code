@@ -53,7 +53,9 @@ const transcript = JSON.parse(
 let cursor = 0;
 let stopped = false;
 let nextAgentRequestId = 1;
-const pendingClientRequestIds = new Map<string, string | number>();
+// A transcript response names only its method. With two requests of one method
+// open, such as a control prompt sent during a turn, the newer one answers first.
+const pendingClientRequestIds = new Map<string, Array<string | number>>();
 const pendingAgentRequestMethods = new Map<string, string>();
 
 // The test reads status while this agent may still be running; rename makes each
@@ -147,7 +149,7 @@ function send(message: JsonRpcMessage): void {
 }
 
 function pendingClientRequestId(method: string): string | number | undefined {
-  return pendingClientRequestIds.get(method);
+  return pendingClientRequestIds.get(method)?.at(-1);
 }
 
 function logicalIncoming(message: JsonRpcMessage): LogicalFrame | undefined {
@@ -208,7 +210,7 @@ function inboundMessage(recorded: LogicalFrame): JsonRpcMessage | undefined {
         stopWithFailure(`No pending client request for ${frame.method}`, frame);
         return undefined;
       }
-      pendingClientRequestIds.delete(frame.method);
+      pendingClientRequestIds.get(frame.method)?.pop();
       return {
         jsonrpc: "2.0",
         id,
@@ -273,7 +275,10 @@ function handleMessage(message: JsonRpcMessage): void {
     return;
   }
   if (actual.kind === "request" && message.id !== undefined && message.id !== null) {
-    pendingClientRequestIds.set(actual.method, message.id);
+    pendingClientRequestIds.set(actual.method, [
+      ...(pendingClientRequestIds.get(actual.method) ?? []),
+      message.id,
+    ]);
   } else if (actual.kind === "response" && message.id !== undefined && message.id !== null) {
     pendingAgentRequestMethods.delete(String(message.id));
   }

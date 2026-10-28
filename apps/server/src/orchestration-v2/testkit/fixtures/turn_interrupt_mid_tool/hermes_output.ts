@@ -44,9 +44,9 @@ export function assertTurnInterruptMidToolHermesOutput(
   const projection = projectionFor(result, transcript.scenario);
   assertSemanticProjectionIntegrity(projection);
   assertVisibleTurnItemsMirrorLocalTurnItems(projection);
+  // Stopped mid-tool, Hermes sends no reply text.
   assertTurnItemTypes(projection, [
     "user_message",
-    "assistant_message",
     "command_execution",
     "run_interrupt_request",
     "run_interrupt_result",
