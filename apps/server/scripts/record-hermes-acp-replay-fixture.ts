@@ -10,6 +10,7 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
@@ -18,7 +19,11 @@ import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import {
   HERMES_DEFAULT_INSTANCE_ID,
   HERMES_PROVIDER,
+  HermesRuntimeRegistry,
   makeHermesAdapterV2,
+  makeHermesAdmissionReader,
+  makeHermesDelegationWatcher,
+  makeHermesLedgerReader,
   spawnHermesRuntime,
 } from "@t3tools/provider-hermes/testing";
 import { ACP_PROTOCOL } from "@t3tools/provider-acp/server/adapter";
@@ -135,10 +140,17 @@ function sessionIdsOf(wire: ReadonlyArray<WireMessage>): ReadonlyArray<string> {
  * Hermes sends no busy signal over ACP and runs delegation results as turns
  * of its own, so the daemon's tables say when it is done: no admission of the
  * recorded sessions is queued, started or lost, and no delegation they
- * started still runs.
+ * started still runs or waits to deliver its result.
  */
-function hermesHasPendingWork(stateDbPath: string, sessionIds: ReadonlyArray<string>): boolean {
-  if (sessionIds.length === 0) return false;
+type HermesPendingWork =
+  | { readonly admissions: number; readonly delegations: number }
+  | { readonly unreadable: unknown };
+
+function hermesPendingWork(
+  stateDbPath: string,
+  sessionIds: ReadonlyArray<string>,
+): HermesPendingWork {
+  if (sessionIds.length === 0) return { admissions: 0, delegations: 0 };
   const placeholders = sessionIds.map(() => "?").join(", ");
   let database: NodeSqlite.DatabaseSync | undefined;
   try {
@@ -153,12 +165,16 @@ function hermesHasPendingWork(stateDbPath: string, sessionIds: ReadonlyArray<str
     const delegations = database
       .prepare(
         `SELECT COUNT(*) AS count FROM async_delegations
-         WHERE parent_session_id IN (${placeholders}) AND state IN ('running', 'finalizing')`,
+         WHERE parent_session_id IN (${placeholders})
+           AND (state IN ('running', 'stalling', 'finalizing') OR delivery_state = 'pending')`,
       )
       .get(...sessionIds);
-    return Number(admissions?.count ?? 0) > 0 || Number(delegations?.count ?? 0) > 0;
-  } catch {
-    return false;
+    return {
+      admissions: Number(admissions?.count ?? 0),
+      delegations: Number(delegations?.count ?? 0),
+    };
+  } catch (cause) {
+    return { unreadable: cause };
   } finally {
     database?.close();
   }
@@ -373,49 +389,67 @@ const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName:
   const hermesHome = environment.HERMES_HOME?.trim() || path.join(homeDirectory, ".hermes");
   const stateDbPath = path.join(hermesHome, "state.db");
   const spawnOptions = { settings, environment, homeDirectory };
-  const layerRegistry = ProviderAdapterRegistry.layerFromAdaptersEffect(
-    Effect.gen(function* () {
-      const adapter = yield* makeHermesAdapterV2({
-        instanceId: HERMES_DEFAULT_INSTANCE_ID,
-        ...spawnOptions,
-        selfInvocation: yield* resolveSelfInvocation(),
-        continuationRequests: yield* ProviderContinuationRequests.ProviderContinuationRequests,
-        makeBaseRuntime: (input, launch) =>
-          spawnHermesRuntime(
-            spawnOptions,
-            { ...input, protocolLogging: tee.attachRuntime() },
-            launch,
+  // The delegation watcher lives as long as the registry layer.
+  const layerRegistry = Layer.unwrap(
+    Effect.map(Effect.scope, (scope) =>
+      ProviderAdapterRegistry.layerFromAdaptersEffect(
+        Effect.gen(function* () {
+          // The scenario runs on the replay TestClock so its clock steps order
+          // dispatches as replay will. Hermes runs on wall time, so the adapter's
+          // session (control-prompt timeouts, finish debounces) and the ledger
+          // watcher do too.
+          const onWallClock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            Effect.provideService(effect, Clock.Clock, wallClock);
+          // Wired as the driver wires it, so recordings follow Hermes' work the same way.
+          const registry = new HermesRuntimeRegistry();
+          const delegations = yield* onWallClock(
+            makeHermesDelegationWatcher({
+              registry,
+              readLedger: makeHermesLedgerReader(stateDbPath),
+            }),
+          );
+          const adapter = yield* makeHermesAdapterV2({
+            instanceId: HERMES_DEFAULT_INSTANCE_ID,
+            ...spawnOptions,
+            registry,
+            onDelegationDispatched: delegations.track,
+            pendingBackgroundWork: delegations.pendingBackgroundWork,
+            readAdmissions: makeHermesAdmissionReader(stateDbPath),
+            selfInvocation: yield* resolveSelfInvocation(),
+            continuationRequests: yield* ProviderContinuationRequests.ProviderContinuationRequests,
+            makeBaseRuntime: (input, launch) =>
+              spawnHermesRuntime(
+                spawnOptions,
+                { ...input, protocolLogging: tee.attachRuntime() },
+                launch,
+              ),
+          });
+          return [
+            {
+              ...adapter,
+              openSession: (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) =>
+                adapter.openSession(input).pipe(
+                  Effect.map((session): ProviderAdapter.ProviderAdapterV2SessionRuntime => ({
+                    ...session,
+                    startTurn: (turnInput) => onWallClock(session.startTurn(turnInput)),
+                    steerTurn: (turnInput) => onWallClock(session.steerTurn(turnInput)),
+                    interruptTurn: (turnInput) => onWallClock(session.interruptTurn(turnInput)),
+                    respondToRuntimeRequest: (turnInput) =>
+                      onWallClock(session.respondToRuntimeRequest(turnInput)),
+                  })),
+                  onWallClock,
+                ),
+            },
+          ];
+        }).pipe(Effect.provideService(Scope.Scope, scope)),
+      ).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+            NodeServices.layer,
+            IdAllocator.layer,
           ),
-      });
-      // The scenario runs on the replay TestClock so its clock steps order
-      // dispatches as replay will. Hermes runs on wall time, so the adapter's
-      // session (control-prompt timeouts, finish debounces) does too.
-      const onWallClock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        Effect.provideService(effect, Clock.Clock, wallClock);
-      return [
-        {
-          ...adapter,
-          openSession: (input) =>
-            adapter.openSession(input).pipe(
-              Effect.map((session): ProviderAdapter.ProviderAdapterV2SessionRuntime => ({
-                ...session,
-                startTurn: (turnInput) => onWallClock(session.startTurn(turnInput)),
-                steerTurn: (turnInput) => onWallClock(session.steerTurn(turnInput)),
-                interruptTurn: (turnInput) => onWallClock(session.interruptTurn(turnInput)),
-                respondToRuntimeRequest: (turnInput) =>
-                  onWallClock(session.respondToRuntimeRequest(turnInput)),
-              })),
-              onWallClock,
-            ),
-        },
-      ];
-    }),
-  ).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
-        NodeServices.layer,
-        IdAllocator.layer,
+        ),
       ),
     ),
   );
@@ -424,12 +458,26 @@ const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName:
   // Hermes must also stay quiet for a few seconds.
   let quietPolls = 0;
   let seenFrames = -1;
+  let lastReport = "";
   const waitForHermesIdle = Effect.sleep("1 second").pipe(
     Effect.andThen(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         quietPolls = seenFrames === tee.wire.length ? quietPolls + 1 : 0;
         seenFrames = tee.wire.length;
-        return quietPolls >= 5 && !hermesHasPendingWork(stateDbPath, sessionIdsOf(tee.wire));
+        const pending = hermesPendingWork(stateDbPath, sessionIdsOf(tee.wire));
+        const report =
+          "unreadable" in pending ? "unreadable" : `${pending.admissions}/${pending.delegations}`;
+        if (report !== lastReport) {
+          lastReport = report;
+          yield* "unreadable" in pending
+            ? Console.warn(
+                `Cannot read ${stateDbPath}; waiting on quiet alone.`,
+                pending.unreadable,
+              )
+            : Console.log(`Hermes work still pending in ${stateDbPath}:`, pending);
+        }
+        const busy = !("unreadable" in pending) && pending.admissions + pending.delegations > 0;
+        return quietPolls >= 5 && !busy;
       }),
     ),
     Effect.repeat({ until: (idle) => idle }),

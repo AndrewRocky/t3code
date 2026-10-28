@@ -278,6 +278,8 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
   let sessionId: string | undefined;
   let openPrompts = 0;
   let activePrompt: Deferred.Deferred<void> | undefined;
+  /** The own prompt a Stop is cancelling, until Hermes returns it. */
+  let stoppingPrompt: Deferred.Deferred<void> | undefined;
   let yolo: boolean | undefined;
   /** Session setup replays the transcript; those frames are history, not work. */
   let loading = 0;
@@ -382,7 +384,20 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     );
   }
 
-  const process = Effect.fnUntraced(function* (notification: SessionNotification) {
+  /**
+   * Hermes reports the tool a Stop cut short as failed. Left open, the adapter
+   * shows it interrupted when the cancelled prompt returns.
+   */
+  const stopCutTool = (notification: SessionNotification): SessionNotification =>
+    notification.update.sessionUpdate === "tool_call_update" &&
+    notification.update.status === "failed" &&
+    stoppingPrompt !== undefined &&
+    stoppingPrompt === activePrompt
+      ? { ...notification, update: { ...notification.update, status: "in_progress" } }
+      : notification;
+
+  const process = Effect.fnUntraced(function* (received: SessionNotification) {
+    const notification = stopCutTool(received);
     const update = notification.update;
     if (update.sessionUpdate === "agent_message_chunk") {
       const text = textOf(update.content);
@@ -573,6 +588,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
   const stopOwnTurn = Effect.fn("HermesRuntime.stopOwnTurn")(function* (bound: Duration.Input) {
     const done = activePrompt;
     if (done === undefined) return true;
+    stoppingPrompt = done;
     const nudge = base.cancel.pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Hermes refused a session/cancel.", { cause }),
@@ -593,6 +609,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
   ) {
     openPrompts -= 1;
     if (activePrompt === done) activePrompt = undefined;
+    if (stoppingPrompt === done) stoppingPrompt = undefined;
     yield* Deferred.succeed(done, undefined);
     const session = sessionId;
     if (session === undefined) return;
