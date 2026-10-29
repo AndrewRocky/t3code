@@ -14,12 +14,9 @@ import {
   hermesDelegationIdForChild,
 } from "./subagents.ts";
 
-// Background children report only through the daemon's own ledger,
-// `async_delegations` in `<HERMES_HOME>/state.db` (`tools/async_delegation.py`).
-// A unit's row stays `running` until it joins, with each finished child
-// recorded in `result_json` (`record_unit_child`), then takes the unit's
-// status, or `unknown` when its owner died. The table is Hermes-internal, so
-// it is read read-only and anything unexpected leaves the rows as they are.
+// Background children report only through `async_delegations` in `state.db`: a
+// unit stays `running` with finished children in `result_json`, then takes its
+// status (`unknown` when its owner died). Read-only; anything unexpected is skipped.
 
 const MAX_RESULT_CHARS = 2_000;
 const DEFAULT_POLL_INTERVAL: Duration.Input = "2 seconds";

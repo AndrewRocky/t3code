@@ -261,14 +261,9 @@ interface HoldPoint {
 }
 
 /**
- * Where the unshown part of an unfinished line has to stop: the first
- * possible tag, the start of a keyword cut off by the chunk boundary, or a
- * trailing backtick that may open a code span wrapping a tag. A tag wrapped
- * in a code span is replaced from its opening backtick, so the hold point
- * moves back to it — unless that backtick has already been shown.
- *
- * `codeSpanOpen` says whether a code span opened in the shown part of the
- * line is still open where `text` begins.
+ * Where an unfinished line's unshown part stops: the first possible tag, a cut-off
+ * keyword, or a backtick that may open a code span around a tag, unless shown.
+ * `codeSpanOpen`: a code span opened earlier in the line is still open.
  */
 function holdPoint(text: string, codeSpanOpen: boolean): HoldPoint {
   /** The opening backtick, in `text`, of a code span still open at `end`; -1 if none. */
