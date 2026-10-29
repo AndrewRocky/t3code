@@ -137,4 +137,5 @@ progress is not reported until they finish.
 - **Edit from here** is not available: Hermes cannot rewind its own session to an
   earlier message from T3 Code yet. Forking a thread works and carries the
   conversation over.
-- Hermes contributes nothing to the [Usage](./usage.md) page.
+- [Usage](./usage.md) counts a Hermes conversation on the day it was last active, since
+  Hermes keeps one running total per session and model.
