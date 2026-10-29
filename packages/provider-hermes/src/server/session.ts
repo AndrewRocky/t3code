@@ -178,8 +178,21 @@ function decorateSession(
         return true;
       return yield* hermesBusy;
     }),
-    startTurn: (input) =>
-      applyRuntimeMode(input.runtimePolicy).pipe(Effect.andThen(session.startTurn(input))),
+    startTurn: (input) => {
+      // Recovery attaches before it prompts; the runtime adopts a turn Hermes still runs.
+      const recovery = input.restartContinuationOfRunId === undefined ? undefined : input.threadId;
+      return Effect.sync(() => {
+        if (recovery !== undefined) options.registry.expectRestartRecovery(recovery);
+      }).pipe(
+        Effect.andThen(applyRuntimeMode(input.runtimePolicy)),
+        Effect.andThen(session.startTurn(input)),
+        Effect.onError(() =>
+          Effect.sync(() => {
+            if (recovery !== undefined) options.registry.clearRestartRecovery(recovery);
+          }),
+        ),
+      );
+    },
     steerTurn,
     interruptTurn,
     rollbackThread,

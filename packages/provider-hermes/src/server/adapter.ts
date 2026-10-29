@@ -56,7 +56,7 @@ import {
   makeHermesRuntime,
 } from "./runtime.ts";
 import { decorateHermesAdapter } from "./session.ts";
-import type { HermesAdmissionReader } from "./workState.ts";
+import { type HermesAdmissionReader, hermesSessionBusy } from "./workState.ts";
 import { discoverHermesSkills } from "./skills.ts";
 import { extractHermesSubagentUpdate } from "./subagents.ts";
 import { normalizeHermesToolCall } from "./toolCalls.ts";
@@ -223,10 +223,29 @@ function makeHermesAcpAdapterFlavor(
         hermesModeIdForRuntimeMode(hermesLaunchRuntimeMode(input.runtimePolicy)),
       );
       yield* options.beforeSpawn?.(input.cwd) ?? Effect.void;
+      // Hermes refuses to swap a busy session's MCP servers, and T3's carry a
+      // credential minted per server start. Reattach without them so the
+      // running turn stays visible; the runtime hands them over once idle.
+      const resumeId = input.resumeSessionId;
+      const resumeAdmissions =
+        resumeId === undefined || options.readAdmissions === undefined
+          ? undefined
+          : yield* options.readAdmissions(resumeId);
+      const deferMcpServers =
+        resumeAdmissions !== undefined &&
+        hermesSessionBusy(resumeAdmissions) &&
+        (input.mcpServers.length > 0 || (input.acpMcpServers?.length ?? 0) > 0);
+      const spawnInput = deferMcpServers
+        ? {
+            ...input,
+            mcpServers: [],
+            ...(input.acpMcpServers === undefined ? {} : { acpMcpServers: [] }),
+          }
+        : input;
       const base =
         options.makeBaseRuntime === undefined
-          ? yield* spawnHermesRuntime(options, input, { yolo })
-          : yield* options.makeBaseRuntime(input, { yolo });
+          ? yield* spawnHermesRuntime(options, spawnInput, { yolo })
+          : yield* options.makeBaseRuntime(spawnInput, { yolo });
       const handle = yield* makeHermesRuntime(base, {
         threadId,
         cwd: input.cwd,
@@ -239,6 +258,14 @@ function makeHermesAcpAdapterFlavor(
         ...(options.readAdmissions === undefined ? {} : { readAdmissions: options.readAdmissions }),
         // The adapter follows work state only when it can start continuation runs.
         followWorkState: options.continuationRequests !== undefined,
+        ...(resumeId === undefined ? {} : { resumeSessionId: resumeId }),
+        ...(deferMcpServers ? { deferredMcpServers: input.mcpServers } : {}),
+        ...(threadId === undefined
+          ? {}
+          : {
+              restartRecoveryPending: () => registry.restartRecoveryPending(threadId),
+              clearRestartRecovery: () => registry.clearRestartRecovery(threadId),
+            }),
         ...(options.testHooks?.onDeferredFinalizeScheduled === undefined
           ? {}
           : { onForeignQuietArmed: options.testHooks.onDeferredFinalizeScheduled }),
