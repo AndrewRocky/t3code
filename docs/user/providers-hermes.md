@@ -111,11 +111,16 @@ Code started.
 
 While a thread is connected to Hermes, T3 Code shows Hermes working whenever it is,
 including work T3 Code did not start, such as a message sent from another Hermes app
-or the results of delegated subtasks. A turn still running from before T3 Code
-restarted shows up when you next send a message in that thread. A message you send
-meanwhile waits for that work to finish. T3 Code cannot stop such work on this Hermes
-version, and **Stop** says so; it ends when Hermes finishes. Background terminal
-processes Hermes started keep running after any Stop.
+or the results of delegated subtasks. A message you send meanwhile waits for that
+work to finish. T3 Code cannot stop such work on this Hermes version, and **Stop**
+says so; it ends when Hermes finishes. Background terminal processes Hermes started
+keep running after any Stop.
+
+If T3 Code restarts while Hermes is working, Hermes keeps going. When T3 Code resumes
+the thread, it shows that turn running and ends it when Hermes finishes, instead of
+asking Hermes to continue. You can still answer Hermes' approvals and questions in
+it, but not stop or steer it. Until that turn ends, Hermes cannot reach T3 Code's own
+tools, such as starting threads; its terminal, file and web tools are unaffected.
 
 ## Delegated subtasks
 

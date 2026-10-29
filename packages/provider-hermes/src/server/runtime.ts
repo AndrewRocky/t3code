@@ -116,6 +116,21 @@ export interface HermesRuntimeOptions {
    * advances its clock by exactly that.
    */
   readonly onForeignQuietArmed?: (quiet: Duration.Input) => Effect.Effect<void>;
+  /** The session `start` reattaches to; a busy one is retried once Hermes idles. */
+  readonly resumeSessionId?: string;
+  /**
+   * T3's MCP servers, when the viewer reattached without them because Hermes
+   * was busy: Hermes swaps a session's servers only while idle, so they are
+   * handed over by a reload at the next idle point.
+   */
+  readonly deferredMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /**
+   * True while T3's restart recovery is starting a turn on this thread. When
+   * Hermes is still running the turn T3 lost, that turn becomes the recovery
+   * turn instead of Hermes receiving a prompt to continue it.
+   */
+  readonly restartRecoveryPending?: () => boolean;
+  readonly clearRestartRecovery?: () => void;
 }
 
 /** What the session decorator and the package services reach a live runtime through. */
@@ -123,7 +138,10 @@ export interface HermesRuntimeHandle {
   readonly threadId: string | undefined;
   readonly runtime: Runtime;
   readonly sessionId: () => string | undefined;
-  /** True while this viewer has a `session/prompt` open, the only turn `session/cancel` reaches. */
+  /**
+   * True while this viewer has a `session/prompt` open, the only turn
+   * `session/cancel` reaches. A turn adopted after a restart is not one.
+   */
   readonly ownPromptOpen: () => boolean;
   readonly workState: () => Effect.Effect<HermesWorkState>;
   /** Hermes' queued admissions, which a just-sent prompt may be one of. */
@@ -144,6 +162,7 @@ export interface HermesRuntimeHandle {
 export class HermesRuntimeRegistry {
   readonly #byThread = new Map<string, HermesRuntimeHandle>();
   readonly #byRuntime = new WeakMap<Runtime, HermesRuntimeHandle>();
+  readonly #restartRecoveries = new Set<string>();
 
   register(handle: HermesRuntimeHandle): Effect.Effect<void> {
     return Effect.sync(() => {
@@ -166,6 +185,19 @@ export class HermesRuntimeRegistry {
         this.#byThread.delete(handle.threadId);
       }
     });
+  }
+
+  /** T3's restart recovery is about to start a turn on this thread. */
+  expectRestartRecovery(threadId: string): void {
+    this.#restartRecoveries.add(threadId);
+  }
+
+  restartRecoveryPending(threadId: string): boolean {
+    return this.#restartRecoveries.has(threadId);
+  }
+
+  clearRestartRecovery(threadId: string): void {
+    this.#restartRecoveries.delete(threadId);
   }
 
   get(threadId: string): HermesRuntimeHandle | undefined {
@@ -293,6 +325,12 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
   let loading = 0;
   let foreignActive = false;
   let lastWorkFrameAt = 0;
+  /** Found busy while restart recovery starts: its frames wait for the recovery turn. */
+  let adoptionPending = false;
+  const heldFrames: Array<SessionNotification> = [];
+  /** The recovery turn following a Hermes turn this viewer did not prompt. */
+  let adoptedPrompt: Deferred.Deferred<void> | undefined;
+  let pendingMcpServers = options.deferredMcpServers;
   const foreignWake = yield* Queue.dropping<void>(1);
   const controlReplies = new Map<string, Array<string>>();
   const mediaStreams = new Map<
@@ -347,14 +385,57 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     yield* Queue.offer(foreignWake, undefined);
   });
 
+  const restartRecoveryPending = () => options.restartRecoveryPending?.() === true;
+
   /** Called under the lock; work Hermes queued behind T3's turn becomes the adapter's next run. */
   const followForeignWorkIfBusy = Effect.fnUntraced(function* (session: string) {
-    if (!followWorkState || foreignActive || openPrompts > 0) return;
+    if (!followWorkState || foreignActive || adoptionPending || openPrompts > 0) return;
     const admissions = yield* readAdmissions(session);
-    if (admissions !== undefined && hermesSessionBusy(admissions)) {
-      yield* beginForeignWork(session);
+    if (admissions === undefined || !hermesSessionBusy(admissions)) return;
+    if (restartRecoveryPending()) {
+      adoptionPending = true;
+      lastWorkFrameAt = yield* Clock.currentTimeMillis;
+      return;
     }
+    yield* beginForeignWork(session);
   });
+
+  const hermesIdle = Effect.fnUntraced(function* (session: string) {
+    const admissions = yield* readAdmissions(session);
+    if (admissions !== undefined) return !hermesSessionBusy(admissions);
+    return (yield* Clock.currentTimeMillis) - lastWorkFrameAt >= FOREIGN_QUIET_MS;
+  });
+
+  /**
+   * Hands Hermes T3's MCP servers once nothing runs. The reload replays the
+   * transcript, which the adapter must not see.
+   */
+  const swapMcpServersUnguarded = Effect.fn("HermesRuntime.swapMcpServers")(function* () {
+    const servers = pendingMcpServers;
+    const session = sessionId;
+    if (servers === undefined || session === undefined) return;
+    if (openPrompts > 0 || foreignActive || adoptionPending) return;
+    const admissions = yield* readAdmissions(session);
+    if (admissions !== undefined && hermesSessionBusy(admissions)) return;
+    loading += 1;
+    const swapped = yield* base.loadSession(session, { mcpServers: servers }).pipe(
+      Effect.as(true),
+      Effect.ensuring(
+        Effect.sync(() => {
+          loading -= 1;
+        }),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Hermes kept its earlier T3 Code tools; retrying when next idle.", {
+          cause,
+        }).pipe(Effect.as(false)),
+      ),
+    );
+    if (swapped && pendingMcpServers === servers) pendingMcpServers = undefined;
+  });
+  // A prompt must not open while the reload's replay is being dropped.
+  const swapping = yield* Semaphore.make(1);
+  const swapMcpServersIfIdle = () => swapping.withPermit(swapMcpServersUnguarded());
 
   const settleForeignWorkIfIdle = Effect.fnUntraced(function* () {
     const session = sessionId;
@@ -381,7 +462,9 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
           ),
         ),
     ),
-    Effect.andThen(Effect.suspend(() => (foreignActive ? followForeignWork : Effect.void))),
+    Effect.andThen(
+      Effect.suspend(() => (foreignActive ? followForeignWork : swapMcpServersIfIdle())),
+    ),
   );
 
   if (followWorkState) {
@@ -418,15 +501,32 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
         if (text.startsWith(STEER_ACK_PREFIX)) return;
       }
     }
+    // A reload's notices (e.g. Hermes keeping its own cwd) would open a run.
+    if (loading > 0 && followWorkState && update.sessionUpdate === "agent_message_chunk") return;
     if (isWorkUpdate(update)) {
       // Under work state a frame outside a turn starts a run, so a replayed
       // transcript must not reach the adapter at all.
       if (loading > 0 && followWorkState) return;
-      if (followWorkState && openPrompts === 0 && notification.sessionId === sessionId) {
-        if (!foreignActive) yield* beginForeignWork(notification.sessionId);
-        lastWorkFrameAt = yield* Clock.currentTimeMillis;
-        if (options.readAdmissions === undefined) {
-          yield* options.onForeignQuietArmed?.(FOREIGN_QUIET_SETTLE) ?? Effect.void;
+      if (followWorkState && notification.sessionId === sessionId) {
+        if (adoptionPending && !restartRecoveryPending() && openPrompts === 0) {
+          // Recovery gave up before its turn: show the work as Hermes' own.
+          adoptionPending = false;
+          heldFrames.length = 0;
+          yield* beginForeignWork(notification.sessionId);
+        }
+        if (openPrompts === 0 && !foreignActive && !adoptionPending) {
+          if (restartRecoveryPending()) adoptionPending = true;
+          else yield* beginForeignWork(notification.sessionId);
+        }
+        if (openPrompts === 0 || adoptedPrompt !== undefined) {
+          lastWorkFrameAt = yield* Clock.currentTimeMillis;
+          if (options.readAdmissions === undefined) {
+            yield* options.onForeignQuietArmed?.(FOREIGN_QUIET_SETTLE) ?? Effect.void;
+          }
+        }
+        if (adoptionPending) {
+          heldFrames.push(received);
+          return;
         }
       }
     }
@@ -632,6 +732,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
   });
 
   const workState = Effect.fn("HermesRuntime.workState")(function* () {
+    if (adoptedPrompt !== undefined || adoptionPending) return "foreign" as const;
     if (openPrompts > 0) return "own" as const;
     if (foreignActive) return "foreign" as const;
     const session = sessionId;
@@ -639,6 +740,56 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     const admissions = yield* readAdmissions(session);
     if (admissions === undefined) return "unknown" as const;
     return hermesSessionBusy(admissions) ? ("foreign" as const) : ("idle" as const);
+  });
+
+  /**
+   * Restart recovery found Hermes still running the turn T3 lost. Prompting
+   * "continue" would queue behind it and redo the work, so the recovery turn
+   * follows that turn instead and ends when Hermes does.
+   */
+  const adoptRunningTurn = Effect.fn("HermesRuntime.adoptRunningTurn")(function* (
+    done: Deferred.Deferred<void>,
+  ) {
+    const session = sessionId;
+    yield* lock.withPermit(
+      Effect.gen(function* () {
+        openPrompts += 1;
+        activePrompt = done;
+        adoptedPrompt = done;
+        adoptionPending = false;
+        foreignActive = false;
+        if (session === undefined) return;
+        yield* deliver({
+          sessionId: session,
+          update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "" } },
+        });
+        yield* Effect.forEach(heldFrames.splice(0), process, { discard: true });
+      }),
+    );
+    const response: EffectAcpSchema.PromptResponse = { stopReason: "end_turn" };
+    const finished = Effect.sleep(FOREIGN_POLL_INTERVAL).pipe(
+      Effect.andThen(
+        session === undefined ? Effect.succeed(true) : lock.withPermit(hermesIdle(session)),
+      ),
+      Effect.repeat({ until: (idle) => idle }),
+      Effect.as(response),
+    );
+    return yield* finished.pipe(
+      Effect.onExit((exit) =>
+        lock
+          .withPermit(
+            Effect.sync(() => {
+              if (adoptedPrompt === done) adoptedPrompt = undefined;
+            }).pipe(Effect.andThen(finishPrompt(done, exit))),
+          )
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not finish the adopted Hermes turn cleanly.", { cause }),
+            ),
+          ),
+      ),
+      Effect.tap(() => swapMcpServersIfIdle()),
+    );
   });
 
   const runtime: Runtime = {
@@ -653,7 +804,13 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
           ? base.handleSessionUpdate((notification) => lock.withPermit(process(notification)))
           : Effect.void;
       }),
-    start: () => settingUp(base.start(), options.launchYolo),
+    start: () =>
+      settingUp(
+        options.resumeSessionId === undefined
+          ? base.start()
+          : afterHermesIdles(options.resumeSessionId, base.start()),
+        options.launchYolo,
+      ).pipe(Effect.tap(() => swapMcpServersIfIdle())),
     loadSession: (id, activation) =>
       settingUp(afterHermesIdles(id, base.loadSession(id, activation))),
     resumeSession: (id, activation) =>
@@ -667,10 +824,21 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
       const skillNames = mentionsSkill ? yield* options.skillNames(options.cwd) : [];
       const prompt = promptWithSkillDirective(blocks, skillNames);
       const done = yield* Deferred.make<void>();
-      yield* lock.withPermit(
+      const adopt = yield* lock.withPermit(
+        Effect.sync(() => {
+          const recovery = restartRecoveryPending();
+          options.clearRestartRecovery?.();
+          return recovery && (adoptionPending || foreignActive);
+        }),
+      );
+      if (adopt) return yield* adoptRunningTurn(done);
+      const open = lock.withPermit(
         Effect.gen(function* () {
           openPrompts += 1;
           activePrompt = done;
+          // Recovery ended without a turn: what Hermes ran meanwhile is not this turn's.
+          adoptionPending = false;
+          heldFrames.length = 0;
           // The turn covers whatever Hermes still runs ahead of this prompt.
           foreignActive = false;
           if (followWorkState && sessionId !== undefined) {
@@ -686,6 +854,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
           }
         }),
       );
+      yield* swapping.withPermit(swapMcpServersUnguarded().pipe(Effect.andThen(open)));
       return yield* base
         .prompt({ ...payload, prompt: [...prompt] }, promptOptions)
         .pipe(
@@ -702,6 +871,9 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     }),
     setMode,
     cancel: Effect.gen(function* () {
+      if (activePrompt !== undefined && activePrompt === adoptedPrompt) {
+        return yield* foreignStopRefused();
+      }
       if (activePrompt === undefined) return yield* base.cancel;
       if (!(yield* stopOwnTurn(options.stopBound ?? DEFAULT_STOP_BOUND))) {
         return yield* stopUnconfirmed();
@@ -709,6 +881,9 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     }),
     // Hermes has no `session/close`; a Stop that closes the session stops the turn instead.
     closeSession: Effect.fn("HermesRuntime.closeSession")(function* () {
+      if (activePrompt !== undefined && activePrompt === adoptedPrompt) {
+        return yield* foreignStopRefused();
+      }
       if (activePrompt !== undefined) {
         if (!(yield* stopOwnTurn(CLOSE_STOP_BOUND))) return yield* stopUnconfirmed();
         return {};
@@ -722,7 +897,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     threadId: options.threadId,
     runtime,
     sessionId: () => sessionId,
-    ownPromptOpen: () => openPrompts > 0,
+    ownPromptOpen: () => openPrompts > 0 && adoptedPrompt === undefined,
     workState,
     queuedAdmissions: () =>
       sessionId === undefined
