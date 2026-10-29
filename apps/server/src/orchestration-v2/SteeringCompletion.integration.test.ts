@@ -448,6 +448,8 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   name: string,
   canRestart = false,
   canSteer = true,
+  /** The adapter refuses steers it would take as the next turn instead. */
+  steerAsFollowUp = false,
 ) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -532,9 +534,18 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
           startTurn,
           compactThread: startTurn,
           steerTurn: (turn) =>
-            Effect.sync(() => {
-              steered.push(turn.message.text);
-            }),
+            steerAsFollowUp
+              ? Effect.fail(
+                  new ProviderAdapter.ProviderAdapterSteerRunError({
+                    driver,
+                    providerThreadId: turn.providerThread.id,
+                    providerTurnId: turn.providerTurnId,
+                    queueAsFollowUp: true,
+                  }),
+                )
+              : Effect.sync(() => {
+                  steered.push(turn.message.text);
+                }),
           interruptTurn: ({ providerTurnId }) =>
             Effect.sync(() => {
               interrupted.push(providerTurnId);
@@ -1014,6 +1025,81 @@ it.effect("queues a steer until the turn ends when the provider cannot steer it"
         assert.equal(started.length, 2);
         assert.equal(started[1]?.runId, queued?.id);
         assert.equal(started[1]?.message.text, "follow up");
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("queues a steer the provider takes only as a follow-up behind the run", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { events, started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+        "steering-refused-follow-up",
+        false,
+        true,
+        true,
+      );
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* startFirstTurn;
+        const first = started[0]!;
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("steer"),
+          threadId,
+          messageId: MessageId.make("message:steer"),
+          text: "also write the CSVs",
+          attachments: [],
+          modelSelection: composerSelection,
+          dispatchMode: { type: "steer_active", targetRunId: first.runId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* worker.drain();
+        // Refused while the run goes on, the message waits as the next run.
+        assert.equal(started.length, 1);
+        assert.deepEqual(
+          (yield* orchestrator.getThreadProjection(threadId)).runs.map((run) => run.status),
+          ["running", "queued"],
+        );
+
+        const settled = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === first.runId &&
+              event.payload.status === "waiting",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        const turn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
+        yield* Queue.offer(events, {
+          type: "provider_turn.updated",
+          driver,
+          providerTurn: { ...turn, status: "completed", completedAt: yield* DateTime.now },
+        });
+        yield* Queue.offer(events, {
+          type: "turn.terminal",
+          driver,
+          providerThreadId: turn.providerThreadId,
+          providerTurnId: turn.id,
+          runOrdinal: first.runOrdinal,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Fiber.join(settled);
+        yield* worker.drain();
+        yield* orchestrator.resumeQueuedRuns;
+        yield* worker.drain();
+
+        assert.deepEqual(steered, []);
+        assert.equal(started.length, 2);
+        assert.equal(started[1]?.message.messageId, MessageId.make("message:steer"));
+        assert.equal(started[1]?.message.text, "also write the CSVs");
       }).pipe(Effect.provide(layer));
     }),
   ),

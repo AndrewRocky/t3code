@@ -247,9 +247,13 @@ export const layerExecutor: Layer.Layer<
                 ),
                 Effect.catch((error) =>
                   Effect.gen(function* () {
+                    const turnCompleted = "turnCompleted" in error && error.turnCompleted === true;
+                    // A provider that cannot steer the running turn takes the
+                    // message as its next one, behind that run.
+                    const queueAsFollowUp =
+                      "queueAsFollowUp" in error && error.queueAsFollowUp === true;
                     if (
-                      !("turnCompleted" in error) ||
-                      !error.turnCompleted ||
+                      (!turnCompleted && !queueAsFollowUp) ||
                       effect.request.type !== "provider-turn.steer"
                     ) {
                       return yield* error;
@@ -278,7 +282,7 @@ export const layerExecutor: Layer.Layer<
                           : { modelSelection: run.modelSelection }),
                         dispatchMode: {
                           type:
-                            message.delegatedCompletion === undefined
+                            message.delegatedCompletion === undefined && turnCompleted
                               ? "start_immediately"
                               : "queue_after_active",
                         },

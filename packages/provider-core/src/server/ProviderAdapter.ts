@@ -304,6 +304,11 @@ export class ProviderAdapterSteerRunError extends Schema.TaggedError<ProviderAda
     driver: ProviderDriverKind,
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
+    /**
+     * The provider cannot steer the turn now running but takes the message as
+     * its next turn, so it is queued behind the run instead of dropped.
+     */
+    queueAsFollowUp: Schema.optional(Schema.Boolean),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
