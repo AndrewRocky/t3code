@@ -43,15 +43,10 @@ import * as ProviderReplayHarness from "../src/orchestration-v2/testkit/Provider
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 
-// Records a live gateway Hermes (`hermes acp`) through T3's real Hermes
-// adapter. Run it once per Hermes build, each with its own HERMES_HOME:
-//
-//   HERMES_HOME=~/.hermes-0.22.5 T3_HERMES_BIN=hermes \
-//     pnpm --filter t3 record:hermes-replay --scenario simple,multi_turn
-//
-// A scenario without a Hermes variant yet is recorded with the ACP variant's
-// steps into `<scenario>/hermes_transcript.ndjson`; register it in
-// `testkit/fixtures/index.ts` afterwards. `--out <file>` writes elsewhere.
+// Records a live `hermes acp` through T3's real Hermes adapter, once per Hermes
+// build with its own HERMES_HOME:
+//   HERMES_HOME=~/.hermes-0.22.5 T3_HERMES_BIN=hermes pnpm --filter t3 record:hermes-replay --scenario simple
+// Scenarios without a Hermes variant borrow the ACP variant's steps; `--out` writes elsewhere.
 
 const wallClock = Clock.Clock.defaultValue();
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -382,7 +377,7 @@ function hermesVariantOf(
   };
 }
 
-const DEFAULT_HERMES_SETTINGS = Schema.decodeUnknownSync(HermesSettings)({ enabled: true });
+const DEFAULT_HERMES_SETTINGS = Schema.decodeSync(HermesSettings)({ enabled: true });
 
 const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName: string) {
   const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find((candidate) => candidate.name === fixtureName);

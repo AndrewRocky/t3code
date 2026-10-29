@@ -29,11 +29,9 @@ import {
 } from "./subagents.ts";
 import { type HermesAdmissionReader, hermesSessionBusy } from "./workState.ts";
 
-// The runtime decorator translates Hermes' gateway dialect into standard ACP
-// before the shared adapter sees it, the way Grok's
-// `makeXAiPromptCompletionRuntime` does. It relies on the adapter registering
-// one session-update handler and sending turns through `prompt`; the tests in
-// `runtime.test.ts` pin that.
+// Translates Hermes' gateway dialect into standard ACP before the shared adapter
+// sees it, like Grok's `makeXAiPromptCompletionRuntime`. It relies on one
+// session-update handler and turns sent through `prompt`, which the tests pin.
 
 type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
 type SessionNotification = EffectAcpSchema.SessionNotification;
@@ -367,9 +365,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     });
 
   const readAdmissions = (session: string) =>
-    options.readAdmissions === undefined
-      ? Effect.succeed(undefined)
-      : options.readAdmissions(session);
+    options.readAdmissions === undefined ? Effect.undefined : options.readAdmissions(session);
 
   const deliverWorkState = (
     session: string,
@@ -901,7 +897,7 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     workState,
     queuedAdmissions: () =>
       sessionId === undefined
-        ? Effect.succeed(undefined)
+        ? Effect.undefined
         : readAdmissions(sessionId).pipe(Effect.map((admissions) => admissions?.queued)),
     stopOwnTurn,
     inject: (notification) =>

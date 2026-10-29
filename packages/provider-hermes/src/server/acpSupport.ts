@@ -150,11 +150,8 @@ export function formatHermesModelLabel(modelId: string): string {
 }
 
 /**
- * Gateway option ids (`acp_adapter/permissions.py`): `allow_once`,
- * `allow_session` (kind `allow_always`, session-scoped), `allow_always`
- * (permanent), `deny`, `deny_always`. The shared adapter answers
- * `acceptForSession` with the first `allow_always` option, which Hermes lists
- * as `allow_session`, so the session button really is session-scoped.
+ * Hermes lists `allow_session` as its first `allow_always`-kind option, and the
+ * shared adapter answers `acceptForSession` with that one, so it stays session-scoped.
  */
 export function hermesApprovalOptions(
   request: EffectAcpSchema.RequestPermissionRequest,

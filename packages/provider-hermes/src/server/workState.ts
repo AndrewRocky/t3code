@@ -2,11 +2,9 @@ import * as NodeSqlite from "node:sqlite";
 
 import * as Effect from "effect/Effect";
 
-// ACP has no busy signal, and on the gateway the viewer's prompt is not the
-// Hermes turn: the daemon admits every prompt into a durable per-session FIFO
-// (`session_admissions` in `<HERMES_HOME>/state.db`, `hermes_state_common.py`)
-// and runs it whether or not a viewer is attached. This reads that FIFO
-// read-only, the way Hermes' own ACP viewer reads the store.
+// ACP has no busy signal, and the gateway runs every admitted prompt whether a
+// viewer is attached or not. This reads that per-session FIFO
+// (`session_admissions` in `<HERMES_HOME>/state.db`) read-only.
 
 /** Compression continues a conversation in a child session; admissions target the live tip. */
 const ADMISSIONS_SQL = `

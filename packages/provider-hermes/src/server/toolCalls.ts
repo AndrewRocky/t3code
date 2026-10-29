@@ -2,11 +2,9 @@ import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel
 
 import { hermesTitleNamesDelegation, parseHermesDelegationHandle } from "./subagents.ts";
 
-// Hermes builds a title per tool (`acp_adapter/tools.py` `build_tool_title`,
-// `<tool>: <preview>`) and a start content block, and sends `raw_input` and
-// `raw_output` only for unknown tools. The shared path reads `rawInput` and
-// backtick titles, so it finds no command, exit code or MCP identity for
-// Hermes' own tools.
+// Hermes titles tools `<tool>: <preview>` and sends `raw_input`/`raw_output` only
+// for unknown tools, so the shared path finds no command, exit code or MCP
+// identity for Hermes' own tools.
 
 /** `_START_CONTENT_BUILDERS["terminal"]` is `$ <command>`, untruncated. */
 const SHELL_ECHO_PATTERN = /^\$[ \t]+(?<command>\S[\s\S]*)$/u;

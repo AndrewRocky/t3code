@@ -11,13 +11,9 @@ import type { HermesSettings } from "../settings.ts";
 import { expandHermesConfigPath, resolveHermesHomePath, withHermesConfigLock } from "./home.ts";
 import { findHermesProjectRoot } from "./skills.ts";
 
-// Hermes loads project skills only for a root listed in
-// `skills.trusted_project_dirs`, matched exactly against the nearest `.git`.
-// A linked worktree's own `.git` file makes every T3 thread worktree an
-// untrusted project. With `trustWorktreesOfTrustedProjects` on, T3 adds the
-// worktree when its main checkout is trusted, tracked by provenance like the
-// command rules: an entry is revoked when its worktree is gone, all of them
-// when the setting is off, and the user's own entries are never touched.
+// Hermes loads project skills only for roots in `skills.trusted_project_dirs`, so
+// a linked worktree starts untrusted. T3 adds a worktree whose main checkout is
+// trusted and revokes only its own entries (gone worktrees, or all when off).
 
 /**
  * T3-owned sidecar, beside the `config.yaml` it describes, recording the
@@ -76,16 +72,9 @@ const resolveRealPath = Effect.fn("resolveRealPath")(function* (value: string) {
 });
 
 /**
- * The main checkout of the linked worktree rooted at `projectRoot`, or
- * `undefined` when `projectRoot` is not a linked worktree of a non-bare repo.
- *
- * Read from git's on-disk layout rather than by spawning git: a linked
- * worktree's `.git` is a file naming its gitdir (absolute, or relative to the
- * worktree under `worktree.useRelativePaths`), and only a worktree gitdir
- * holds a `commondir` file pointing at the shared `.git`. A submodule also has
- * a `.git` file but no `commondir`, so trusting a superproject never reaches
- * its submodules; a worktree of a bare repository has a common dir that is not
- * a checkout's `.git`, so there is no main checkout to inherit from.
+ * The main checkout of the linked worktree at `projectRoot`, read from git's
+ * on-disk layout: only a worktree gitdir has `commondir`, so submodules and
+ * worktrees of bare repositories return `undefined`.
  */
 export const resolveLinkedWorktreeMainRoot = Effect.fn("resolveLinkedWorktreeMainRoot")(function* (
   projectRoot: string,
@@ -121,16 +110,9 @@ export interface HermesWorktreeTrustMergeResult {
 }
 
 /**
- * Apply one addition and a set of removals to `skills.trusted_project_dirs` in
- * a parsed `config.yaml`. Exported for focused unit tests, separate from the
- * file I/O.
- *
- * Returns `undefined`, leaving the file untouched, when the document root or
- * its `skills` value is not a mapping, or `trusted_project_dirs` holds
- * something other than a string or a list — a shape T3 did not write and
- * should not replace. Non-string list entries are carried through verbatim.
- * A list left empty drops its key, and a `skills` mapping left empty drops
- * too, as in the command-rule merge.
+ * Applies one addition and some removals to `skills.trusted_project_dirs`.
+ * `undefined` leaves the file alone when its shape is not one T3 wrote; empty
+ * lists and an empty `skills` mapping are dropped.
  */
 export function mergeHermesWorktreeTrust(
   existingConfig: unknown,
@@ -190,19 +172,9 @@ export function serializeHermesWorktreeTrustProvenance(
 }
 
 /**
- * Bring this Hermes home's trust list in line with
- * {@link HermesSettings.trustWorktreesOfTrustedProjects} for `cwd`.
- *
- * With the setting on and `cwd` inside a linked worktree whose main checkout
- * is trusted, the worktree root is added. Separately, T3's own earlier
- * additions are revoked — all of them when the setting is off, otherwise only
- * those whose worktree is gone.
- *
- * Cheap when there is nothing to do: with the setting off and nothing claimed
- * it reads one missing sidecar, and outside a linked worktree it never opens
- * `config.yaml`. Best-effort and total, like the command-rule sync: an
- * unreadable or unexpected `config.yaml` is left alone with a warning, and a
- * session start never fails because of this.
+ * Aligns the trust list with {@link HermesSettings.trustWorktreesOfTrustedProjects}
+ * for `cwd`. Best-effort: an unexpected `config.yaml` is left alone with a
+ * warning, and a session start never fails because of it.
  */
 export const syncHermesWorktreeTrust = Effect.fn("syncHermesWorktreeTrust")(function* (
   hermesSettings: Pick<HermesSettings, "homePath" | "trustWorktreesOfTrustedProjects">,
