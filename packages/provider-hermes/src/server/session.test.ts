@@ -203,7 +203,8 @@ describe("decorateHermesAdapter", () => {
       });
       const error = yield* steer("also cover the empty case").pipe(Effect.flip);
       expect(error._tag).toBe("ProviderAdapterSteerRunError");
-      expect(steerFailureDetail(error)).toContain("has not started this turn");
+      expect(steerFailureDetail(error)).toContain("did not start");
+      expect(error).toMatchObject({ queueAsFollowUp: true });
       expect(runtime.controlPrompts).toEqual([]);
     }),
   );
@@ -212,7 +213,8 @@ describe("decorateHermesAdapter", () => {
     Effect.gen(function* () {
       const { runtime, steer } = yield* setup({ runtimeMode: "approval-required", queued: 1 });
       const error = yield* steer("also cover the empty case").pipe(Effect.flip);
-      expect(steerFailureDetail(error)).toContain("has not started this turn");
+      expect(steerFailureDetail(error)).toContain("did not start");
+      expect(error).toMatchObject({ queueAsFollowUp: true });
       expect(runtime.controlPrompts).toEqual([]);
     }),
   );
@@ -271,6 +273,7 @@ describe("decorateHermesAdapter", () => {
       const { runtime, steer } = yield* setup({ runtimeMode: "approval-required" });
       const error = yield* steer("look at this", [{ type: "image" }]).pipe(Effect.flip);
       expect(steerFailureDetail(error)).toContain("attachments");
+      expect(error).toMatchObject({ queueAsFollowUp: true });
       expect(runtime.controlPrompts).toEqual([]);
     }),
   );
