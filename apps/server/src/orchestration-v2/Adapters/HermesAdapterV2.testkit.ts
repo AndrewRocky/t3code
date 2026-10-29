@@ -30,7 +30,7 @@ import {
   makeAcpReplayRuntime,
 } from "./AcpAdapterV2.testkit.ts";
 
-const DEFAULT_HERMES_SETTINGS = Schema.decodeUnknownSync(HermesSettings)({ enabled: true });
+const DEFAULT_HERMES_SETTINGS = Schema.decodeSync(HermesSettings)({ enabled: true });
 
 /** The recorder writes this HOME into transcripts, so `MEDIA:` paths resolve the same way. */
 const REPLAY_HOME = "/home/hermes-replay";

@@ -83,11 +83,9 @@ const ACP_EXTRA_INSTALL_HINT =
   "Hermes is installed but its ACP adapter is missing. Re-run the Hermes installer, or install the `acp` extra in the Hermes checkout.";
 
 /**
- * Hermes intercepts these itself (`acp_adapter/gateway_session_meta.py`).
- * Withheld: `model` (T3's own `/model` opens the picker), `steer` and `queue`
- * (the composer does both), and `undo`, `retry` and `reset`, which rewrite
- * Hermes' history behind T3's thread. `discard` is not advertised, but it is
- * the way out Hermes names when a lost turn blocks the session.
+ * Commands Hermes intercepts itself. Withheld: `model`, `steer` and `queue` (T3 has
+ * its own), and `undo`, `retry`, `reset`, which rewrite history behind T3's thread.
+ * `discard` is Hermes' named way out of a lost turn.
  */
 const HERMES_SLASH_COMMANDS: ReadonlyArray<ServerProviderSlashCommand> = [
   COMPACT_SLASH_COMMAND,

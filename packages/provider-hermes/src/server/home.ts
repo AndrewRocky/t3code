@@ -9,11 +9,9 @@ import type { HermesSettings } from "../settings.ts";
 const HERMES_HOME_ENV = "HERMES_HOME";
 
 /**
- * The `HERMES_HOME` the spawned CLI will see. It also selects the gateway
- * daemon, so the spawn environment, skill discovery and the `state.db` reader
- * must all resolve it the same way: the configured `homePath` (tilde-expanded,
- * because it is typed into a form), then an inherited `HERMES_HOME` (taken
- * literally, as the child receives it), then the platform default.
+ * The `HERMES_HOME` the CLI sees, which also selects the gateway daemon: the
+ * configured `homePath` (tilde-expanded), then an inherited `HERMES_HOME`, then
+ * the default. Spawn, skill discovery and the `state.db` readers must agree.
  */
 export const resolveHermesHomePath = Effect.fn("resolveHermesHomePath")(function* (
   config: Pick<HermesSettings, "homePath">,
