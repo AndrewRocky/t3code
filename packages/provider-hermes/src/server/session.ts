@@ -63,11 +63,16 @@ const rollbackRefused = (input: ProviderAdapter.ProviderAdapterV2RollbackThreadI
     cause: new Error("Hermes is still working on this thread. Try again once it has finished."),
   });
 
-const steerFailure = (input: ProviderAdapter.ProviderAdapterV2SteerInput, detail: string) =>
+const steerFailure = (
+  input: ProviderAdapter.ProviderAdapterV2SteerInput,
+  detail: string,
+  queueAsFollowUp = false,
+) =>
   new ProviderAdapter.ProviderAdapterSteerRunError({
     driver: HERMES_DRIVER_KIND,
     providerThreadId: input.providerThread.id,
     providerTurnId: input.providerTurnId,
+    ...(queueAsFollowUp ? { queueAsFollowUp: true } : {}),
     cause: new Error(detail),
   });
 
@@ -104,7 +109,8 @@ function decorateSession(
   /**
    * `/steer` with nothing running falls through to a normal submit, and with
    * T3's prompt still queued behind other work it becomes another queued
-   * prompt, so it is sent only while this viewer's own prompt is open.
+   * prompt, so it is sent only while this viewer's own prompt is open. A
+   * message Hermes cannot take as a steer is queued as T3's next turn.
    */
   const steerTurn: Session["steerTurn"] = Effect.fn("HermesSession.steerTurn")(function* (input) {
     const handle = options.registry.get(input.threadId);
@@ -113,11 +119,16 @@ function decorateSession(
     if (handle === undefined || !handle.ownPromptOpen() || (queued ?? 0) > 0) {
       return yield* steerFailure(
         input,
-        "Hermes has not started this turn yet, so it cannot be steered. Send the message as a follow-up instead.",
+        "Hermes cannot steer a turn this T3 Code session did not start; the message follows it.",
+        true,
       );
     }
     if (input.message.attachments.length > 0) {
-      return yield* steerFailure(input, "Hermes cannot steer a running turn with attachments.");
+      return yield* steerFailure(
+        input,
+        "Hermes cannot steer a running turn with attachments; the message follows it.",
+        true,
+      );
     }
     const reply = yield* handle
       .controlPrompt(`/steer ${input.message.text}`)

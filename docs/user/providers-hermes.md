@@ -89,10 +89,11 @@ can check out another branch, so its skills may differ from the ones you reviewe
 
 ## Working with a running turn
 
-A message you send while Hermes works is delivered with Hermes' `/steer`, so Hermes
-takes it into account without stopping. If Hermes has not started your previous
-message yet, for example because it is finishing work you started from another
-Hermes app, the message is refused; send it again once that turn ends.
+A message you steer while Hermes works is delivered with Hermes' `/steer`, so Hermes
+takes it into account without stopping. Hermes can steer only turns T3 Code started.
+While it works on its own, for example reading a finished background job or
+subagent, or a message from another Hermes app, a steered message waits and is
+sent as the next turn once Hermes finishes. So is a steer with attachments.
 
 Images and videos Hermes shares with `MEDIA:` appear in the conversation.
 
@@ -119,8 +120,9 @@ keep running after any Stop.
 If T3 Code restarts while Hermes is working, Hermes keeps going. When T3 Code resumes
 the thread, it shows that turn running and ends it when Hermes finishes, instead of
 asking Hermes to continue. You can still answer Hermes' approvals and questions in
-it, but not stop or steer it. Until that turn ends, Hermes cannot reach T3 Code's own
-tools, such as starting threads; its terminal, file and web tools are unaffected.
+it, but not stop it, and a steered message waits until it ends. Until that turn
+ends, Hermes cannot reach T3 Code's own tools, such as starting threads; its
+terminal, file and web tools are unaffected.
 
 ## Delegated subtasks
 
