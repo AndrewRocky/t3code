@@ -148,6 +148,45 @@ describe("decorateHermesAdapter", () => {
     }),
   );
 
+  it.effect("tells the runtime a restart-recovery turn is starting, until it fails", () =>
+    Effect.gen(function* () {
+      const registry = new HermesRuntimeRegistry();
+      const seen: Array<boolean> = [];
+      const failing = { fail: false };
+      const adapter = decorateHermesAdapter(
+        {
+          openSession: () =>
+            Effect.succeed({
+              events: Stream.empty,
+              startTurn: () =>
+                Effect.suspend(() => {
+                  seen.push(registry.restartRecoveryPending(THREAD));
+                  return failing.fail ? Effect.fail("activation failed") : Effect.void;
+                }),
+            } as unknown as Session),
+        } as unknown as Adapter,
+        { registry },
+      );
+      const session = yield* adapter.openSession({
+        threadId: THREAD,
+        runtimePolicy: policy("approval-required"),
+      } as unknown as ProviderAdapter.ProviderAdapterV2OpenSessionInput);
+      const turn = (restartContinuationOfRunId?: string) =>
+        session.startTurn({
+          threadId: THREAD,
+          runtimePolicy: policy("approval-required"),
+          ...(restartContinuationOfRunId === undefined ? {} : { restartContinuationOfRunId }),
+        } as unknown as ProviderAdapter.ProviderAdapterV2TurnInput);
+
+      yield* turn();
+      yield* turn("run-1");
+      failing.fail = true;
+      yield* turn("run-2").pipe(Effect.flip);
+      expect(seen).toEqual([false, true, true]);
+      expect(registry.restartRecoveryPending(THREAD)).toBe(false);
+    }),
+  );
+
   it.effect("steers through Hermes' /steer while its own prompt is open", () =>
     Effect.gen(function* () {
       const { runtime, steer } = yield* setup({ runtimeMode: "approval-required" });
