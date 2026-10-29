@@ -35,7 +35,13 @@ const setup = Effect.fn(function* (input: {
   readonly admissions?: ReadonlyArray<HermesAdmissions | undefined>;
   /** Frames Hermes replays while a session loads. */
   readonly replay?: ReadonlyArray<Update>;
+  readonly deferredMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /** T3's restart recovery is starting a turn on this thread. */
+  readonly restartRecovery?: boolean;
 }) {
+  let recovery = input.restartRecovery === true;
+  const loads: Array<unknown> = [];
+  let prompts = 0;
   let baseHandler: Handler | undefined;
   const cancels = yield* Queue.unbounded<void>();
   const promptStarted = yield* Queue.unbounded<void>();
@@ -54,10 +60,16 @@ const setup = Effect.fn(function* (input: {
         baseHandler = handler;
       }),
     start: () => Effect.succeed(started),
-    loadSession: () =>
-      Effect.forEach(input.replay ?? [], emit, { discard: true }).pipe(Effect.as(started)),
+    loadSession: (_id: string, activation: unknown) =>
+      Effect.sync(() => loads.push(activation)).pipe(
+        Effect.andThen(Effect.forEach(input.replay ?? [], emit, { discard: true })),
+        Effect.as(started),
+      ),
     prompt: () =>
-      Queue.offer(promptStarted, undefined).pipe(Effect.andThen(Deferred.await(promptReturn))),
+      Effect.sync(() => (prompts += 1)).pipe(
+        Effect.andThen(Queue.offer(promptStarted, undefined)),
+        Effect.andThen(Deferred.await(promptReturn)),
+      ),
     cancel: Queue.offer(cancels, undefined).pipe(Effect.asVoid),
   } as unknown as AcpSessionRuntime.AcpSessionRuntime["Service"];
 
@@ -69,6 +81,13 @@ const setup = Effect.fn(function* (input: {
     skillNames: () => Effect.succeed([]),
     mediaTagOptions: { homeDir: "/home/me", isFile: () => false },
     followWorkState: input.followWorkState ?? false,
+    ...(input.deferredMcpServers === undefined
+      ? {}
+      : { deferredMcpServers: input.deferredMcpServers }),
+    restartRecoveryPending: () => recovery,
+    clearRestartRecovery: () => {
+      recovery = false;
+    },
     readAdmissions: () =>
       Effect.sync(() => {
         const answers = input.admissions ?? [IDLE];
@@ -85,7 +104,17 @@ const setup = Effect.fn(function* (input: {
     handle.runtime
       .prompt({ prompt: [{ type: "text", text: "refactor the parser" }] })
       .pipe(Effect.forkChild);
-  return { handle, emit, cancels, promptStarted, promptReturn, delivered, startPrompt };
+  return {
+    handle,
+    emit,
+    cancels,
+    promptStarted,
+    promptReturn,
+    delivered,
+    startPrompt,
+    loads,
+    prompts: () => prompts,
+  };
 });
 
 const takeAll = <A>(queue: Queue.Queue<A>) => Queue.clear(queue);
@@ -260,5 +289,79 @@ describe("Hermes work state", () => {
           { sessionUpdate: "state_update", state: "running" },
         ]);
       }),
+  );
+});
+
+describe("Hermes after a T3 restart", () => {
+  const T3_TOOLS: ReadonlyArray<EffectAcpSchema.McpServer> = [
+    { name: "t3-code", command: "t3", args: ["acp-mcp-bridge"], env: [] },
+  ];
+
+  it.effect("follows the turn Hermes still runs instead of prompting it to continue", () =>
+    Effect.gen(function* () {
+      // start (busy), held-frame settle polls (busy), then idle
+      const fake = yield* setup({
+        followWorkState: true,
+        restartRecovery: true,
+        admissions: [BUSY, BUSY, IDLE],
+      });
+      yield* fake.handle.runtime.start();
+      yield* fake.emit(turnText("still sleeping"));
+      expect(yield* takeAll(fake.delivered)).toEqual([]);
+
+      const recoveryTurn = yield* fake.startPrompt();
+      yield* TestClock.adjust("1 second");
+      expect(yield* takeAll(fake.delivered)).toEqual([
+        { sessionUpdate: "user_message_chunk", content: { type: "text", text: "" } },
+        turnText("still sleeping"),
+      ]);
+      expect(fake.handle.ownPromptOpen()).toBe(false);
+      const refused = yield* fake.handle.runtime.cancel.pipe(Effect.flip);
+      expect(refused).toMatchObject({ code: HERMES_STOP_UNCONFIRMED_CODE });
+
+      yield* TestClock.adjust("1 second");
+      expect((yield* Fiber.join(recoveryTurn)).stopReason).toBe("end_turn");
+      expect(yield* takeAll(fake.delivered)).toEqual([
+        { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" },
+      ]);
+      expect(fake.prompts()).toBe(0);
+    }),
+  );
+
+  it.effect("prompts the recovery turn as usual once Hermes has finished", () =>
+    Effect.gen(function* () {
+      const fake = yield* setup({ followWorkState: true, restartRecovery: true });
+      yield* fake.handle.runtime.start();
+      yield* fake.startPrompt();
+      yield* Queue.take(fake.promptStarted);
+      expect(fake.prompts()).toBe(1);
+    }),
+  );
+
+  it.effect("hands Hermes T3's tools once the turn it reattached to ends", () =>
+    Effect.gen(function* () {
+      // start (busy), first settle poll (busy), second (idle), swap check (idle)
+      const fake = yield* setup({
+        followWorkState: true,
+        deferredMcpServers: T3_TOOLS,
+        admissions: [BUSY, BUSY, IDLE],
+        replay: [turnText("history")],
+      });
+      yield* fake.handle.runtime.start();
+      expect(fake.loads).toEqual([]);
+      yield* TestClock.adjust("1 second");
+      expect(fake.loads).toEqual([]);
+      yield* TestClock.adjust("1 second");
+      expect(fake.loads).toEqual([{ mcpServers: T3_TOOLS }]);
+      // The reload's replay is history, not a run.
+      expect(yield* takeAll(fake.delivered)).toEqual([
+        { sessionUpdate: "state_update", state: "running" },
+        { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" },
+      ]);
+
+      yield* fake.startPrompt();
+      yield* Queue.take(fake.promptStarted);
+      expect(fake.loads).toHaveLength(1);
+    }),
   );
 });
