@@ -54,6 +54,7 @@ import {
   hermesModelsFromSettings,
 } from "./status.ts";
 import { makeHermesTextGeneration } from "./textGeneration.ts";
+import { hermesUsageReader, type HermesUsageReaderEnv } from "./usage.ts";
 import { syncHermesWorktreeTrust } from "./worktreeTrust.ts";
 
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
@@ -77,12 +78,13 @@ export type HermesDriverEnv =
   | Path.Path
   | ProviderEventLoggers.ProviderEventLoggers;
 
-export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Path.Path> = {
+export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, HermesUsageReaderEnv> = {
   driverKind: HERMES_DRIVER_KIND,
   metadata: {
     displayName: "Hermes",
     supportsMultipleInstances: true,
   },
+  usage: hermesUsageReader,
   configSchema: HermesSettings,
   defaultConfig: (): HermesSettings => decodeHermesSettings({}),
   create: Effect.fn("HermesDriver.create")(function* ({
