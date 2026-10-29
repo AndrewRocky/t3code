@@ -4,13 +4,9 @@ import type {
 } from "@t3tools/provider-acp/server/adapter";
 import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
 
-// Hermes has no subagent channel over ACP: the daemon publishes `subagent.*`
-// events to viewers, but the ACP projector drops them. A top-level
-// `delegate_task` runs in the background and completes at once with a JSON
-// dispatch handle naming the children (`tools/delegate_tool_dispatch.py`
-// `_dispatched_payload`). The runtime decorator turns that handle into one
-// synthetic tool call per child, which `extractHermesSubagentUpdate` maps onto
-// T3 subagents; the ledger watcher completes them later.
+// ACP drops Hermes' `subagent.*` events. A background `delegate_task` returns a
+// dispatch handle naming its children; the runtime turns it into one synthetic
+// tool call per child, and the ledger watcher completes them later.
 
 /** Matched loosely: the tool was `delegate` before it was `delegate_task`. */
 const DELEGATION_TITLE_PATTERN = /^\s*delegate(?:_task)?\s*:/iu;
@@ -75,13 +71,9 @@ export function hermesTitleNamesDelegation(title: string | undefined): boolean {
 }
 
 /**
- * The background handle, or `undefined` for anything else: the discriminator
- * is `{"status": "dispatched", "mode": "background"}`, which no other Hermes
- * tool produces. A synchronous delegation returns real results instead and is
- * left to the generic completion path.
- *
- * `goals` lists every task; `subagent_ids` lists only the started children,
- * in task order, so refused task indexes are skipped when pairing them.
+ * The background handle (`{"status": "dispatched", "mode": "background"}`), else
+ * `undefined`. `subagent_ids` lists only started children in task order, so
+ * refused task indexes are skipped when pairing them with `goals`.
  */
 export function parseHermesDelegationHandle(
   text: string | undefined,

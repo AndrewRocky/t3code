@@ -34,15 +34,9 @@ const WIDE_TABLE = [
 ].join("\n");
 
 /**
- * The same command at Rich's non-terminal fallback of 80 columns, with real
- * skill names from a live install. Two names are ellipsized and one is not.
- *
- * This is the output that actually reached us in the field: `TERM=dumb` plus
- * `FORCE_COLOR=0` made Rich believe it was writing to a dumb terminal, and
- * `Console.size` short-circuits to `(80, 25)` for one of those *before* it
- * reads `COLUMNS`. `buildHermesSkillsListEnvironment` no longer sets either
- * key, but the parser still has to cope, because a width surprise must degrade
- * rather than silently disable a working skill.
+ * The listing at Rich's 80-column fallback, as it reached users with
+ * `TERM=dumb FORCE_COLOR=0`: two names ellipsized, one not. The parser must
+ * degrade rather than disable a working skill.
  */
 const TRUNCATED_TABLE = [
   "                        Installed Skills (enabled only)                         ",
@@ -139,11 +133,8 @@ describe("buildHermesSkillsListEnvironment", () => {
   });
 
   it("never sets TERM or FORCE_COLOR, which would pin the width back to 80", () => {
-    // Rich's `Console.size` returns a hardcoded (80, 25) for a dumb terminal
-    // *before* reading COLUMNS, and `is_terminal` treats FORCE_COLOR as
-    // presence-based (`force_color != ""`), so even "0" reads as a terminal.
-    // Setting both — which looks like belt-and-braces colour suppression —
-    // truncates every long skill name. This is the regression guard.
+    // Rich returns (80, 25) for a dumb terminal before reading COLUMNS and treats
+    // any FORCE_COLOR as a terminal, so setting either truncates long names.
     const env = buildHermesSkillsListEnvironment({});
     assert.isUndefined(env.TERM);
     assert.isUndefined(env.FORCE_COLOR);
@@ -254,15 +245,8 @@ describe("annotateHermesSkillsWithEnableState", () => {
 });
 
 /**
- * A fake `hermes` that behaves like Rich: it renders wide only when the
- * environment actually lets Rich see a wide console, and falls back to the
- * 80-column truncated form otherwise.
- *
- * This is the test that was missing. The unit tests above covered the parser
- * against both fixtures and the env builder's keys, but nothing checked the
- * two together — so an env that looked like belt-and-braces colour
- * suppression silently pinned Rich to 80 columns in the field while every
- * test stayed green.
+ * A fake `hermes` that renders wide only when the environment lets Rich see a
+ * wide console, so the env builder and the parser are tested together.
  */
 const fakeHermesSpawner = (recorded: {
   env?: Record<string, string | undefined>;

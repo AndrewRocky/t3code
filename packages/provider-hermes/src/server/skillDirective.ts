@@ -1,8 +1,6 @@
-// Hermes has no `$`-token syntax, so the composer's `$skill` token would reach
-// the model as prose. Hermes does have `skill_view(name)` and a system prompt
-// that tells the model to load relevant skills, so naming the choice lets
-// Hermes load it through its own tool: progressive disclosure and SKILL.md
-// preprocessing stay Hermes', and the load shows as a real tool row.
+// The composer's `$skill` token means nothing to Hermes, but its system prompt
+// tells the model to load skills with `skill_view(name)`. Naming the choice lets
+// Hermes load it itself, shown as a real tool row.
 
 /**
  * The composer's token grammar (`composerInlineTokens.ts`), widened to match

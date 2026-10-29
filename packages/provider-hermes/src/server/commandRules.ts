@@ -9,19 +9,10 @@ import { parse as parseYamlDocument, stringify as stringifyYamlDocument } from "
 import type { HermesSettings } from "../settings.ts";
 import { resolveHermesHomePath, withHermesConfigLock } from "./home.ts";
 
-// Hermes' ACP modes gate edits only; commands go through `tools/approval.py`,
-// which reads `command_allowlist` (fnmatch, case-sensitive, never for compound
-// commands) and `approvals.deny` (case-insensitive, enforced even under YOLO)
-// from `config.yaml`. Neither has an ACP surface, so T3 syncs its Command
-// rules into that file.
-//
-// T3 is not the only writer: Hermes appends "Allow always" answers to the
-// allowlist and administrators hand-edit both lists. So the sync manages T3's
-// own entries only, recorded in a provenance sidecar: it adds configured
-// patterns, removes ones T3 wrote and no longer configures, and leaves every
-// other entry alone. A missing or unreadable record makes the sync
-// additive-only. A concurrent Hermes write can win the rename; both sides
-// self-heal on their next read, so no cross-process lock is taken.
+// Hermes reads `command_allowlist` and `approvals.deny` from `config.yaml` with no
+// ACP surface, and also writes the allowlist itself. T3 syncs only its own
+// entries, recorded in a provenance sidecar; without the record it only adds.
+// A concurrent Hermes write can win the rename; both self-heal on the next read.
 
 /**
  * Beside the `config.yaml` it describes, so instances sharing one home agree on
@@ -141,28 +132,9 @@ export interface HermesCommandRulesMergeResult {
 }
 
 /**
- * Merge T3's configured patterns into a parsed `config.yaml` document.
- * Exported for focused unit tests, separate from the file I/O.
- *
- * `previouslySynced` is the provenance record — the patterns T3 wrote into
- * this same file on its last sync. Entries listed there and no longer
- * configured are removed; everything else in the file is preserved. Omit it
- * (or pass `undefined`) when the record is missing or unreadable, which makes
- * the merge purely additive so that an entry of unknown authorship is never
- * dropped.
- *
- * Returns `undefined` when the existing document root is present but is not
- * a mapping (a bare list or scalar `config.yaml`, or a YAML document whose
- * top level is not `key: value` pairs) — that file is left completely
- * untouched rather than replaced with a fresh map that would discard
- * whatever it actually held. Pass `undefined` for `existingConfig` for a
- * config.yaml that does not exist yet (or is empty, which `yaml.parse`
- * reports as `null`); either is treated as "no document yet".
- *
- * A list that ends up empty has its key dropped rather than written as `[]`
- * — the two are equivalent to Hermes, and dropping it leaves no trace of a
- * rule set the user has cleared. An `approvals` mapping left with no keys at
- * all is dropped for the same reason.
+ * Merges T3's patterns into a parsed `config.yaml`, removing only entries in
+ * `previouslySynced` that are no longer configured (none without a record).
+ * `undefined` leaves a non-mapping document alone; empty lists drop their key.
  */
 export function mergeHermesCommandRules(
   existingConfig: unknown,
@@ -248,16 +220,9 @@ export function serializeHermesCommandRulesProvenance(rules: HermesCommandRules)
 }
 
 /**
- * Sync {@link HermesSettings.commandAllowlist} / `commandDenylist` into
- * `<HERMES_HOME>/config.yaml`, before a session spawns Hermes so the new
- * process reads them on its very first config load. Patterns T3 wrote on a
- * previous sync and no longer configures are removed; see the module doc for
- * why nothing else in either list is ever touched.
- *
- * Best-effort and total: an unreadable, unparseable, or non-map config.yaml
- * is left alone with a logged warning rather than risking data loss on a
- * file Hermes itself (and possibly an administrator) also writes. A session
- * start never fails because this sync could not run.
+ * Syncs the command rules into `<HERMES_HOME>/config.yaml` before a spawn, so
+ * Hermes reads them on its first load. Best-effort: a bad file is left alone
+ * with a warning, and a session start never fails because of it.
  */
 export const syncHermesCommandRules = Effect.fn("syncHermesCommandRules")(function* (
   hermesSettings: Pick<HermesSettings, "homePath" | "commandAllowlist" | "commandDenylist">,

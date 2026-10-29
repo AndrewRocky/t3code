@@ -8,12 +8,9 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import type { HermesSettings } from "../settings.ts";
 
-// `skills.ts` owns existence (only the scan has paths); Hermes owns
-// eligibility. `hermes skills list --enabled-only` applies the config
-// denylists, the `platforms:`/`environments:` gates and the trusted-project
-// security quarantine, which cannot be reimplemented here. The listing has no
-// `--json`, so its Rich table is parsed, and every failure is fail-open: the
-// annotation may never be the reason the picker is empty.
+// The scan owns existence; `hermes skills list --enabled-only` owns eligibility
+// (denylists, gates, the trusted-project quarantine). The listing has no `--json`,
+// so its table is parsed, failing open: it must never empty the picker.
 
 /**
  * Rich falls back to 80 columns without a terminal and then ellipsizes long
@@ -146,11 +143,9 @@ export const discoverHermesEnabledSkillNames = Effect.fn("discoverHermesEnabledS
 );
 
 /**
- * A scanned skill the listing omits becomes `enabled: false` (the picker hides
- * it). Returns `undefined`, meaning "leave everything enabled", when the
- * listing is missing, empty for a non-empty scan (indistinguishable from a
- * renderer change that broke the parser), or has a truncated name that does
- * not resolve to exactly one scanned skill.
+ * Skills the listing omits become `enabled: false`. `undefined` leaves all enabled
+ * when the listing is missing, empty for a non-empty scan, or has a truncated
+ * name that matches more or less than one skill.
  */
 export function annotateHermesSkillsWithEnableState(
   skills: ReadonlyArray<ServerProviderSkill>,

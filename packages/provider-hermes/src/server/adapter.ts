@@ -122,6 +122,7 @@ const HermesProviderCapabilitiesV2 = {
 const UNSCOPED_AGENT: AgentScopeShape = {
   wrap: ({ command, args }) => Effect.succeed({ command, args }),
   oomKilled: () => Effect.succeed(false),
+  stop: () => Effect.void,
   clear: () => Effect.void,
 };
 

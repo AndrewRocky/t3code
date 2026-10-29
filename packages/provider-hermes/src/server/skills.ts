@@ -8,11 +8,9 @@ import { parse as parseYamlDocument } from "yaml";
 import type { HermesSettings } from "../settings.ts";
 import { expandHermesConfigPath, resolveHermesHomePath } from "./home.ts";
 
-// Hermes implements the agentskills.io layout under category directories
-// (`<root>/<category>/<skill>/SKILL.md`) and walks the whole tree
-// (`agent/skill_utils.py:iter_skill_index_files`). `hermes skills list` has no
-// `--json`, so the on-disk layout is the stable contract; enable state comes
-// from the CLI in `skillState.ts`.
+// Hermes keeps skills at `<root>/<category>/<skill>/SKILL.md` and walks the whole
+// tree. `hermes skills list` has no `--json`, so the layout is the stable
+// contract; enable state comes from the CLI in `skillState.ts`.
 
 type HermesSkillScope = "user" | "project";
 
@@ -233,14 +231,9 @@ const collectSkillIndexPaths = Effect.fn("collectHermesSkillIndexPaths")(functio
 });
 
 /**
- * Best effort: an unreadable root or malformed frontmatter is skipped. Roots
- * are resolved **first-wins** in Hermes' order
- * (`get_scan_ordered_skills_dirs`): project `.hermes` then `.agents`, the
- * profile root, `skills.create_dir`, then `skills.external_dirs`.
- *
- * Project skills may be over-reported: Hermes loads them only for a trusted
- * project and after its security scan. `skillState.ts` corrects that whenever
- * the CLI is reachable.
+ * Best effort, roots resolved first-wins in Hermes' order: project `.hermes`, then
+ * `.agents`, the profile, `skills.create_dir`, `skills.external_dirs`. Project
+ * skills may be over-reported until `skillState.ts` corrects them.
  */
 export const discoverHermesSkills = Effect.fn("discoverHermesSkills")(function* (
   config: Pick<HermesSettings, "homePath">,
