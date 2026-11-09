@@ -123,7 +123,9 @@ the thread, it shows that turn running and ends it when Hermes finishes, instead
 asking Hermes to continue. You can still answer Hermes' approvals and questions in
 it, but not stop it, and a steered message waits until it ends. Until that turn
 ends, Hermes cannot reach T3 Code's own tools, such as starting threads; its
-terminal, file and web tools are unaffected.
+terminal, file and web tools are unaffected. If T3 Code cannot reattach to a Hermes
+that is still working, your message fails with a note to send it again once Hermes
+finishes, instead of starting a second Hermes session in the same folder.
 
 ## Delegated subtasks
 
