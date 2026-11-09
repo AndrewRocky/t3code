@@ -1,5 +1,6 @@
 import * as NodeSqlite from "node:sqlite";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type ProviderReplayEntry } from "@t3tools/contracts";
 import { HermesSettings } from "@t3tools/provider-hermes/settings";
@@ -481,6 +482,7 @@ const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName:
           Layer.mergeAll(
             TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
             NodeServices.layer,
+            NodeCrypto.layer,
             IdAllocator.layer,
           ),
         ),
@@ -604,5 +606,5 @@ if (scenarios.length === 0) {
 await Effect.runPromise(
   Effect.forEach(scenarios, (name) => Effect.scoped(recordScenario(name)), {
     discard: true,
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
