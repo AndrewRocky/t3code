@@ -4,6 +4,7 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
@@ -154,6 +155,28 @@ describe("Hermes Stop", () => {
       expect(error).toMatchObject({ code: HERMES_STOP_UNCONFIRMED_CODE });
       expect(fake.handle.ownPromptOpen()).toBe(true);
       expect((yield* takeAll(fake.cancels)).length).toBeGreaterThan(10);
+    }),
+  );
+
+  it.effect("keeps a closing Stop open past the adapter's 10 s, so it can offer Force stop", () =>
+    Effect.gen(function* () {
+      const fake = yield* setup({});
+      yield* fake.handle.runtime.start();
+      const prompt = yield* fake.startPrompt();
+      yield* Queue.take(fake.promptStarted);
+
+      // The shared adapter's own limit: no answer by then means "not responding".
+      const stop = yield* fake.handle.runtime
+        .closeSession()
+        .pipe(Effect.timeoutOption("10 seconds"), Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      expect(Option.isNone(yield* Fiber.join(stop))).toBe(true);
+      expect(fake.handle.ownPromptOpen()).toBe(true);
+      expect((yield* takeAll(fake.cancels)).length).toBeGreaterThanOrEqual(4);
+
+      // A late confirmation still ends the prompt as stopped.
+      yield* Deferred.succeed(fake.promptReturn, { stopReason: "cancelled" });
+      expect((yield* Fiber.join(prompt)).stopReason).toBe("cancelled");
     }),
   );
 

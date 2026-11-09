@@ -6,7 +6,7 @@ providers you configure in Hermes.
 
 ## Set up Hermes
 
-1. Install Hermes 0.22.3 or newer on the environment; 0.22.5 or newer is
+1. Install Hermes 0.22.3 or newer on the environment; 0.23.0 or newer is
    recommended. Older releases run a different ACP server that T3 Code does not
    support. Run `hermes --version` to check.
 2. Run `hermes model` once to pick a provider and sign in.
@@ -105,10 +105,11 @@ command Hermes names in its message.
 
 Closing a connection does not stop Hermes; its background service finishes the turn
 regardless. So **Stop** keeps asking Hermes to stop until it confirms, and the turn
-stays running until then. If Hermes still has not confirmed after about a minute of
-retries, the turn stays running with the interrupt request shown; press **Stop**
-again to retry. Archiving a thread or quitting T3 Code also tries to stop a turn T3
-Code started.
+stays running until then. If Hermes has not confirmed after about 10 seconds, T3 Code
+offers **Force stop**. It ends the turn in T3 Code and closes T3 Code's connection to
+Hermes, but Hermes' background service may still finish the turn: your next message
+waits for it, and T3 Code shows that work when it reconnects. Archiving a thread or
+quitting T3 Code also tries to stop a turn T3 Code started.
 
 While a thread is connected to Hermes, T3 Code shows Hermes working whenever it is,
 including work T3 Code did not start, such as a message sent from another Hermes app
