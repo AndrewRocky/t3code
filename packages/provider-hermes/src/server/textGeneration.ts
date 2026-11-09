@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -27,7 +27,7 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
   environment: NodeJS.ProcessEnv,
   homeDirectory: string,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const runHermesJson: TextGenerationOperations.Runner = Effect.fn(
@@ -50,7 +50,7 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
           }),
         }),
       ).pipe(
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(SecureRandom.SecureRandom, random),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
       );
       const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(

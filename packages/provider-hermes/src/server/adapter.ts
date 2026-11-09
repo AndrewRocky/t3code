@@ -6,7 +6,7 @@ import {
   defaultInstanceIdForDriver,
   type OrchestrationV2ProviderCapabilities,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -123,6 +123,7 @@ const UNSCOPED_AGENT: AgentScopeShape = {
   wrap: ({ command, args }) => Effect.succeed({ command, args }),
   oomKilled: () => Effect.succeed(false),
   stop: () => Effect.void,
+  kill: () => Effect.succeed(false),
   clear: () => Effect.void,
 };
 
@@ -154,7 +155,7 @@ export interface HermesAdapterV2Options {
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
   >;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
 }
@@ -330,7 +331,7 @@ export const makeHermesAdapterV2 = Effect.fn("makeHermesAdapterV2")(function* (
 
 export type HermesAdapterV2DriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path

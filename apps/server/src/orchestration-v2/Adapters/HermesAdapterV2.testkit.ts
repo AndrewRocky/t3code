@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HermesSettings } from "@t3tools/provider-hermes/settings";
 import * as Effect from "effect/Effect";
@@ -126,7 +127,9 @@ function layerHermesProviderAdapterRegistryReplay(
           return [adapter];
         }).pipe(Effect.provideService(Scope.Scope, scope)),
       ).pipe(
-        Layer.provide(Layer.mergeAll(layerHost, NodeServices.layer, IdAllocator.layer)),
+        Layer.provide(
+          Layer.mergeAll(layerHost, NodeServices.layer, NodeCrypto.layer, IdAllocator.layer),
+        ),
         // Held inbound lines must not outlive the scenario and wedge teardown.
         Layer.merge(
           Layer.effectDiscard(
