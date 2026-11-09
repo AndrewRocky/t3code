@@ -7,6 +7,7 @@ import { HermesSettings } from "./settings.ts";
 export const hermesClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("hermes"),
   label: "Hermes",
+  featured: false,
   badgeLabel: "Early Access",
   settingsSchema: HermesSettings,
   icon: {
