@@ -53,9 +53,11 @@ const CONTROL_PROMPT_TIMEOUT = "15 seconds";
 
 /** Each `session/cancel` is a stop attempt inside the viewer; repeating one is harmless. */
 const STOP_NUDGE_INTERVAL = "3 seconds";
+/**
+ * The shared adapter stops waiting after 10 seconds and offers Force stop, while
+ * Hermes may still confirm later; this only caps a caller that waits longer.
+ */
 const DEFAULT_STOP_BOUND: Duration.Input = "45 seconds";
-/** The shared adapter gives `closeSession` 10 seconds before it reports the Stop unconfirmed. */
-const CLOSE_STOP_BOUND: Duration.Input = "9 seconds";
 
 const FOREIGN_POLL_INTERVAL = "1 second";
 /** With no readable store, work T3 did not start counts as done once Hermes goes quiet. */
@@ -881,7 +883,9 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
         return yield* foreignStopRefused();
       }
       if (activePrompt !== undefined) {
-        if (!(yield* stopOwnTurn(CLOSE_STOP_BOUND))) return yield* stopUnconfirmed();
+        if (!(yield* stopOwnTurn(options.stopBound ?? DEFAULT_STOP_BOUND))) {
+          return yield* stopUnconfirmed();
+        }
         return {};
       }
       if ((yield* workState()) === "foreign") return yield* foreignStopRefused();
