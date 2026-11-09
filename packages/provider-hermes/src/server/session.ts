@@ -8,7 +8,7 @@ import {
   hermesLaunchRuntimeMode,
   hermesModeIdForRuntimeMode,
 } from "./acpSupport.ts";
-import type { HermesRuntimeRegistry } from "./runtime.ts";
+import { type HermesRuntimeRegistry, isHermesBusyRefusal } from "./runtime.ts";
 
 // The session decorator spreads the shared adapter's session object and
 // overrides single members, the way upstream decorates Grok's runtime. It
@@ -55,6 +55,9 @@ const interruptRefused = (input: ProviderAdapter.ProviderAdapterV2InterruptInput
       "Hermes is finishing a turn this T3 Code session did not start, which T3 Code cannot stop on this Hermes version. It ends when Hermes finishes.",
     ),
   });
+
+const THREAD_BUSY_MESSAGE =
+  "Hermes is still finishing earlier work in this conversation. Send your message again once it has finished.";
 
 const rollbackRefused = (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) =>
   new ProviderAdapter.ProviderAdapterRollbackThreadError({
@@ -149,6 +152,21 @@ function decorateSession(
     },
   );
 
+  /** A replacement session would work in the same folder while Hermes still runs the old turn. */
+  const resumeThread: Session["resumeThread"] = (input) =>
+    session.resumeThread(input).pipe(
+      Effect.mapError((error) =>
+        isHermesBusyRefusal(error)
+          ? new ProviderAdapter.ProviderAdapterThreadInUseError({
+              driver: HERMES_DRIVER_KIND,
+              providerThreadId: input.providerThread.id,
+              detail: THREAD_BUSY_MESSAGE,
+              cause: error,
+            })
+          : error,
+      ),
+    );
+
   /** A reset rollback replaces the viewer, and the old session would keep running. */
   const rollbackThread: Session["rollbackThread"] = Effect.fn("HermesSession.rollbackThread")(
     function* (input) {
@@ -204,6 +222,7 @@ function decorateSession(
         ),
       );
     },
+    resumeThread,
     steerTurn,
     interruptTurn,
     rollbackThread,

@@ -295,6 +295,15 @@ function isResumeConflict(error: EffectAcpErrors.AcpError): boolean {
   return RESUME_CONFLICT_PATTERN.test(`${error.errorMessage} ${data}`);
 }
 
+/** Hermes refused to reattach because the session is still busy, wherever that sits in a cause chain. */
+export function isHermesBusyRefusal(cause: unknown, depth = 0): boolean {
+  if (typeof cause !== "object" || cause === null || depth > 8) return false;
+  if ("_tag" in cause && cause._tag === "AcpRequestError") {
+    return isResumeConflict(cause as EffectAcpErrors.AcpError);
+  }
+  return "cause" in cause && isHermesBusyRefusal(cause.cause, depth + 1);
+}
+
 const stopUnconfirmed = () =>
   new EffectAcpErrors.AcpRequestError({
     code: HERMES_STOP_UNCONFIRMED_CODE,

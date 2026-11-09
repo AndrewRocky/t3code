@@ -1,7 +1,9 @@
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { ProviderSessionId, ProviderThreadId } from "@t3tools/contracts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as EffectAcpErrors from "effect-acp/errors";
 import { describe, expect } from "vite-plus/test";
 
 import {
@@ -9,6 +11,7 @@ import {
   HermesRuntimeRegistry,
   type HermesWorkState,
 } from "./runtime.ts";
+import { HERMES_DRIVER_KIND } from "./acpSupport.ts";
 import { decorateHermesAdapter } from "./session.ts";
 
 type Adapter = ProviderAdapter.ProviderAdapterV2["Service"];
@@ -63,6 +66,7 @@ const setup = Effect.fn(function* (input: {
   readonly queued?: number;
   readonly basePending?: boolean;
   readonly pendingBackgroundWork?: (threadId: string) => Effect.Effect<boolean>;
+  readonly resumeError?: unknown;
 }) {
   const registry = new HermesRuntimeRegistry();
   const promptOpen = input.promptOpen ?? true;
@@ -87,6 +91,8 @@ const setup = Effect.fn(function* (input: {
     steerTurn: () => Effect.die("the shared steer must not run for Hermes"),
     interruptTurn: () => Effect.sync(() => void baseCalls.push("interruptTurn")),
     rollbackThread: () => Effect.sync(() => (baseCalls.push("rollbackThread"), {})),
+    resumeThread: () =>
+      input.resumeError === undefined ? Effect.succeed({}) : Effect.fail(input.resumeError),
   } as unknown as Session;
   const adapter = decorateHermesAdapter(
     { openSession: () => Effect.succeed(baseSession) } as unknown as Adapter,
@@ -122,7 +128,21 @@ const setup = Effect.fn(function* (input: {
     session.rollbackThread({
       providerThread: { id: "provider-thread-1" },
     } as unknown as ProviderAdapter.ProviderAdapterV2RollbackThreadInput);
-  return { session, runtime, startedTurns, baseCalls, startTurn, steer, interrupt, rollback };
+  const resume = () =>
+    session.resumeThread({ providerThread: { id: "provider-thread-1" } } as unknown as Parameters<
+      Session["resumeThread"]
+    >[0]);
+  return {
+    session,
+    runtime,
+    startedTurns,
+    baseCalls,
+    startTurn,
+    steer,
+    interrupt,
+    rollback,
+    resume,
+  };
 });
 
 const steerFailureDetail = (error: unknown) =>
@@ -253,6 +273,34 @@ describe("decorateHermesAdapter", () => {
       const idle = yield* setup({ runtimeMode: "approval-required", promptOpen: false });
       yield* idle.rollback();
       expect(idle.baseCalls).toEqual(["rollbackThread"]);
+    }),
+  );
+
+  it.effect("fails a reattach Hermes refuses as busy instead of letting T3 replace it", () =>
+    Effect.gen(function* () {
+      const resumeError = (errorMessage: string) =>
+        new ProviderAdapter.ProviderAdapterResumeThreadError({
+          driver: HERMES_DRIVER_KIND,
+          providerSessionId: ProviderSessionId.make("provider-session-1"),
+          providerThreadId: ProviderThreadId.make("provider-thread-1"),
+          cause: new EffectAcpErrors.AcpRequestError({ code: -32603, errorMessage }),
+        });
+      const busy = yield* setup({
+        runtimeMode: "approval-required",
+        resumeError: resumeError("session_busy"),
+      });
+      expect(yield* busy.resume().pipe(Effect.flip)).toMatchObject({
+        _tag: "ProviderAdapterThreadInUseError",
+      });
+
+      // Any other failure still lets T3 recover the context in a fresh session.
+      const other = yield* setup({
+        runtimeMode: "approval-required",
+        resumeError: resumeError("session_not_found"),
+      });
+      expect(yield* other.resume().pipe(Effect.flip)).toMatchObject({
+        _tag: "ProviderAdapterResumeThreadError",
+      });
     }),
   );
 
