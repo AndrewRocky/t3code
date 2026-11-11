@@ -48,4 +48,63 @@ describe("buildHermesModelsFromSessionModelState", () => {
       ["openrouter:qwen/qwen3-coder", "openrouter · qwen/qwen3-coder"],
     ]);
   });
+
+  // Recorded from Hermes 0.23.0 on a named custom endpoint, before the session's first turn.
+  const namedEndpoint = {
+    currentModelId: "custom:rnd-glm",
+    availableModels: [
+      { modelId: "custom:rnd-glm", name: "custom · rnd-glm" },
+      { modelId: "custom:local-gateway:rnd-glm", name: "rnd-glm" },
+    ],
+  };
+
+  it("hides the provisional id a named custom endpoint reports before its first turn", () => {
+    expect(
+      buildHermesModelsFromSessionModelState(namedEndpoint).map((model) => model.slug),
+    ).toEqual(["custom:local-gateway:rnd-glm"]);
+    // A plain custom endpoint has no other id, so it keeps its own.
+    expect(
+      buildHermesModelsFromSessionModelState({
+        currentModelId: "custom:rnd-glm",
+        availableModels: [{ modelId: "custom:rnd-glm", name: "custom · rnd-glm" }],
+      }).map((model) => model.slug),
+    ).toEqual(["custom:rnd-glm"]);
+  });
+
+  it("offers Hermes' reasoning effort on every model, and no other session setting", () => {
+    const [model] = buildHermesModelsFromSessionModelState(namedEndpoint, [
+      {
+        id: "edit_approval_policy",
+        name: "Edits",
+        category: "mode",
+        type: "select",
+        currentValue: "ask",
+        options: [{ name: "Default", value: "ask" }],
+      },
+      {
+        id: "reasoning_effort",
+        name: "Reasoning effort",
+        category: "thought_level",
+        type: "select",
+        currentValue: "medium",
+        options: [
+          { name: "low", value: "low" },
+          { name: "medium", value: "medium" },
+          { name: "high", value: "high" },
+        ],
+      },
+    ]);
+    expect(model?.capabilities?.optionDescriptors).toEqual([
+      expect.objectContaining({
+        id: "reasoning_effort",
+        role: "reasoning",
+        currentValue: "medium",
+        options: [
+          expect.objectContaining({ id: "low" }),
+          expect.objectContaining({ id: "medium" }),
+          expect.objectContaining({ id: "high" }),
+        ],
+      }),
+    ]);
+  });
 });

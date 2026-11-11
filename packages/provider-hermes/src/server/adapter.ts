@@ -147,6 +147,7 @@ export interface HermesAdapterV2Options {
   /** The live model catalog from each session Hermes opens. */
   readonly onModelsDiscovered?: (
     modelState: Parameters<NonNullable<AcpAdapterV2Flavor["onSessionConfigurationUpdate"]>>[2],
+    configOptions: Parameters<NonNullable<AcpAdapterV2Flavor["onSessionConfigurationUpdate"]>>[0],
   ) => Effect.Effect<void>;
   /** Replaces the spawned `hermes acp` process; the decorator still wraps it. */
   readonly makeBaseRuntime?: (
@@ -299,8 +300,8 @@ function makeHermesAcpAdapterFlavor(
     ...(options.onModelsDiscovered === undefined
       ? {}
       : {
-          onSessionConfigurationUpdate: (_configOptions, _modeState, modelState) =>
-            options.onModelsDiscovered!(modelState),
+          onSessionConfigurationUpdate: (configOptions, _modeState, modelState) =>
+            options.onModelsDiscovered!(modelState, configOptions),
         }),
     ...(options.assertComplete === undefined ? {} : { assertComplete: options.assertComplete }),
   };
