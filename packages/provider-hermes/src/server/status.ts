@@ -25,6 +25,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import { acpProviderOptionDescriptors } from "@t3tools/provider-acp/server/sessionConfig";
 import type * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   buildServerProvider,
@@ -66,7 +67,7 @@ const HERMES_PRESENTATION = {
   supportedRuntimeModes: HERMES_SUPPORTED_RUNTIME_MODES,
 } as const;
 
-/** Hermes' `ModelInfo` carries no per-model options; effort is set in `config.yaml`. */
+/** Hermes' `ModelInfo` carries no per-model options. */
 export const HERMES_EMPTY_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
@@ -108,15 +109,48 @@ export function hermesModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting> | undefined,
   discovered: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(discovered, customModels ?? [], EMPTY_CAPABILITIES);
+  // Hermes' effort applies to the session, whatever the model, so custom models get it too.
+  const capabilities = discovered[0]?.capabilities ?? EMPTY_CAPABILITIES;
+  return providerModelsFromSettings(discovered, customModels ?? [], capabilities);
+}
+
+/**
+ * Before its first turn, a session on a named custom endpoint reports itself as
+ * `custom:<model>`, then as `custom:<endpoint>:<model>`; the first id stops working.
+ */
+function isProvisionalCustomAlias(modelState: EffectAcpSchema.SessionModelState, id: string) {
+  if (id !== modelState.currentModelId || !id.startsWith("custom:")) return false;
+  const model = id.slice("custom:".length);
+  return modelState.availableModels.some(({ modelId }) => {
+    const rest = modelId.startsWith("custom:") ? modelId.slice("custom:".length) : "";
+    const separator = rest.indexOf(":");
+    return separator > 0 && rest.slice(separator + 1) === model;
+  });
+}
+
+/** Hermes' effort is a session setting (`reasoning_effort`), offered for every model. */
+function hermesModelCapabilities(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+): ModelCapabilities {
+  const reasoning = (configOptions ?? []).filter((option) => option.category === "thought_level");
+  if (reasoning.length === 0) return EMPTY_CAPABILITIES;
+  return createModelCapabilities({
+    optionDescriptors: acpProviderOptionDescriptors({
+      configOptions: reasoning,
+      modeState: undefined,
+    }),
+  });
 }
 
 export function buildHermesModelsFromSessionModelState(
   modelState: EffectAcpSchema.SessionModelState | null | undefined,
+  configOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null,
 ): ReadonlyArray<ServerProviderModel> {
   if (!modelState || modelState.availableModels.length === 0) return [];
+  const capabilities = hermesModelCapabilities(configOptions);
   const seen = new Set<string>();
   return modelState.availableModels.flatMap((model): ServerProviderModel[] => {
+    if (isProvisionalCustomAlias(modelState, model.modelId)) return [];
     const slug = resolveHermesAcpBaseModelId(model.modelId);
     if (slug === undefined || seen.has(slug)) return [];
     seen.add(slug);
@@ -125,7 +159,7 @@ export function buildHermesModelsFromSessionModelState(
         slug,
         name: model.name.trim() || formatHermesModelLabel(slug),
         isCustom: false,
-        capabilities: EMPTY_CAPABILITIES,
+        capabilities,
       },
     ];
   });

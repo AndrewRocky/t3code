@@ -36,7 +36,8 @@ The model picker shows the models Hermes offered the last time a Hermes session
 started, and keeps them between restarts. To load them before your first thread,
 refresh provider status in **Settings → Providers**; that opens one short session in
 Hermes' history. **Default** keeps whatever model Hermes is configured to use. Model ids include their provider, such as
-`openrouter:qwen/qwen3-coder`, and a custom model must include it too.
+`openrouter:qwen/qwen3-coder`, and a custom model must include it too. **Effort** sets
+Hermes' reasoning effort for the conversation, whichever model you pick.
 
 ## Permission modes
 

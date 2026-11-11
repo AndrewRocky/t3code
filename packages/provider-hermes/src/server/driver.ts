@@ -195,8 +195,8 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
       pendingBackgroundWork: delegations.pendingBackgroundWork,
       readAdmissions: makeHermesAdmissionReader(stateDb),
       beforeSpawn: syncConfig,
-      onModelsDiscovered: (modelState) =>
-        publishCatalog(buildHermesModelsFromSessionModelState(modelState)),
+      onModelsDiscovered: (modelState, configOptions) =>
+        publishCatalog(buildHermesModelsFromSessionModelState(modelState, configOptions)),
     })
       .create({ instanceId, displayName, accentColor, environment, enabled, config })
       .pipe(
@@ -336,7 +336,10 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
         );
         const started = yield* runtime.start();
         yield* publishCatalog(
-          buildHermesModelsFromSessionModelState(started.sessionSetupResult.models),
+          buildHermesModelsFromSessionModelState(
+            started.sessionSetupResult.models,
+            started.sessionSetupResult.configOptions,
+          ),
         );
       },
       Effect.scoped,
