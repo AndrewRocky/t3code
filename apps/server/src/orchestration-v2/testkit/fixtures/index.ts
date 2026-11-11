@@ -66,6 +66,8 @@ import { grokBackgroundSubagentInput } from "./grok_background_subagent/input.ts
 import { assertGrokBackgroundSubagentOutput } from "./grok_background_subagent/output.ts";
 import { assertHermesBackgroundSubagentOutput } from "./hermes_background_subagent/hermes_output.ts";
 import { hermesBackgroundSubagentInput } from "./hermes_background_subagent/input.ts";
+import { assertHermesEffortOutput } from "./hermes_effort/hermes_output.ts";
+import { HERMES_EFFORT_LEVEL, hermesEffortInput } from "./hermes_effort/input.ts";
 import { grokMonitorInput } from "./grok_monitor/input.ts";
 import { assertGrokMonitorOutput } from "./grok_monitor/output.ts";
 import { grokPromptErrorInput } from "./grok_prompt_error/input.ts";
@@ -739,6 +741,21 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: HERMES_MODEL_SELECTION,
         runContinuationWorker: true,
         assertOutput: assertHermesBackgroundSubagentOutput,
+      },
+    ],
+  },
+  {
+    name: "hermes_effort",
+    buildInput: hermesEffortInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("hermes"),
+        transcriptFile: new URL("./hermes_effort/hermes_transcript.ndjson", import.meta.url),
+        modelSelection: {
+          ...HERMES_MODEL_SELECTION,
+          options: [{ id: "reasoning_effort", value: HERMES_EFFORT_LEVEL }],
+        },
+        assertOutput: assertHermesEffortOutput,
       },
     ],
   },
