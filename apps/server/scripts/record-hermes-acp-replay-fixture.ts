@@ -46,7 +46,7 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 
 // Records a live `hermes acp` through T3's real Hermes adapter, once per Hermes
 // build with its own HERMES_HOME:
-//   HERMES_HOME=~/.hermes-0.22.5 T3_HERMES_BIN=hermes pnpm --filter t3 record:hermes-replay --scenario simple
+//   HERMES_HOME=~/.hermes-0.23.0 T3_HERMES_BIN=hermes pnpm --filter t3 record:hermes-replay --scenario simple
 // Scenarios without a Hermes variant borrow the ACP variant's steps; `--out` writes elsewhere.
 
 const wallClock = Clock.Clock.defaultValue();
