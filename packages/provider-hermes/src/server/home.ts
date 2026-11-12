@@ -1,7 +1,10 @@
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
+import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
 import type { HermesSettings } from "../settings.ts";
@@ -29,19 +32,108 @@ export const resolveHermesHomePath = Effect.fn("resolveHermesHomePath")(function
   if (environmentHome.length > 0) {
     return cwd ? path.resolve(cwd, environmentHome) : path.resolve(environmentHome);
   }
+  return defaultHermesHome(path, platform, homeDirectory, environment);
+});
+
+function defaultHermesHome(
+  path: Path.Path,
+  platform: NodeJS.Platform,
+  homeDirectory: string,
+  environment: NodeJS.ProcessEnv,
+): string {
   // WSL2 installs under `~/.hermes` and reports linux, so the platform is the right test.
   const localAppData = environment.LOCALAPPDATA?.trim() ?? "";
   if (platform === "win32" && localAppData.length > 0) {
     return path.join(localAppData, "hermes");
   }
   return path.join(homeDirectory, ".hermes");
+}
+
+/** A named profile's home, `<root>/profiles/<name>`, which Hermes takes as given. */
+function isHermesProfileDirectory(home: string): boolean {
+  return (
+    home
+      .split(/[\\/]+/u)
+      .filter((part) => part.length > 0)
+      .at(-2) === "profiles"
+  );
+}
+
+/** Hermes' rule for profile names (`hermes_constants.PROFILE_ID_RE`). */
+const HERMES_PROFILE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+
+/**
+ * The home Hermes itself runs in. Unless the home is a profile directory, Hermes
+ * follows `hermes profile use <name>`, which `<root>/active_profile` records; a
+ * missing profile stays the root, where Hermes reports it.
+ */
+export const resolveHermesActiveHome = Effect.fn("resolveHermesActiveHome")(function* (
+  config: Pick<HermesSettings, "homePath">,
+  environment: NodeJS.ProcessEnv,
+): Effect.fn.Return<string, never, FileSystem.FileSystem | Path.Path> {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* resolveHermesHomePath(config, environment);
+  if (isHermesProfileDirectory(home)) return home;
+  const nativeHome = defaultHermesHome(
+    path,
+    yield* HostProcess.Platform,
+    yield* HostProcess.HomeDirectory,
+    environment,
+  );
+  const fromNative = path.relative(nativeHome, home);
+  const root = fromNative.startsWith("..") || path.isAbsolute(fromNative) ? home : nativeHome;
+  const active = yield* fileSystem.readFileString(path.join(root, "active_profile")).pipe(
+    Effect.map((text) =>
+      text
+        .replace(/^\uFEFF/u, "")
+        .trim()
+        .toLowerCase(),
+    ),
+    Effect.orElseSucceed(() => ""),
+  );
+  if (active === "" || active === "default" || !HERMES_PROFILE_ID.test(active)) return home;
+  const profileHome = path.join(root, "profiles", active);
+  const exists = yield* fileSystem.exists(profileHome).pipe(Effect.orElseSucceed(() => false));
+  return exists ? profileHome : home;
 });
 
 /**
- * Only `HERMES_HOME` is written. The gateway daemon owns execution, so other
- * instance variables reach the viewer process but not tool runs; Hermes reads
- * credentials from `<home>/.env` itself.
+ * The settings and environment every Hermes command of one instance runs with:
+ * T3's own environment and one home, resolved once. Instance variables only
+ * select the home: a gateway T3 starts keeps the environment it was started
+ * with and runs every Hermes client of that home.
  */
+export const pinHermesHome = Effect.fn("pinHermesHome")(function* <
+  Settings extends Pick<HermesSettings, "homePath">,
+>(
+  settings: Settings,
+  instanceEnvironment: ProviderInstanceEnvironment | undefined,
+  hostEnvironment: NodeJS.ProcessEnv,
+) {
+  const selection = yield* mergeProviderInstanceEnvironment(instanceEnvironment, hostEnvironment);
+  const home = yield* resolveHermesActiveHome(settings, selection);
+  const windows = (yield* HostProcess.Platform) === "win32";
+  const environment: NodeJS.ProcessEnv = { ...hostEnvironment };
+  if (windows) {
+    for (const name of Object.keys(environment)) {
+      if (name.toUpperCase() === HERMES_HOME_ENV) delete environment[name];
+    }
+  }
+  environment[HERMES_HOME_ENV] = home;
+  return { settings: { ...settings, homePath: home }, environment };
+});
+
+/**
+ * Keeps a root home from following a later `hermes profile use`, as Hermes does
+ * when it starts its own gateway; a profile directory needs no selector.
+ */
+export function hermesProfileArgs(environment: NodeJS.ProcessEnv): ReadonlyArray<string> {
+  const home = environment[HERMES_HOME_ENV]?.trim() ?? "";
+  return home.length === 0 || isHermesProfileDirectory(home) ? [] : ["--profile", "default"];
+}
+
+/** Only `HERMES_HOME` is written; Hermes reads credentials from `<home>/.env` itself. */
 export function buildHermesEnvironment(input: {
   readonly config: Pick<HermesSettings, "homePath">;
   readonly environment?: NodeJS.ProcessEnv;

@@ -9,7 +9,7 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 import type { HermesSettings } from "../settings.ts";
-import { buildHermesEnvironment } from "./home.ts";
+import { buildHermesEnvironment, hermesProfileArgs } from "./home.ts";
 
 export const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
 
@@ -100,26 +100,31 @@ export function hermesEditPolicyForMode(modeId: string): string {
   return HERMES_EDIT_POLICY_BY_MODE[modeId] ?? modeId;
 }
 
+/**
+ * The environment is complete and replaces T3's: a viewer can start Hermes' gateway,
+ * which keeps it and serves every Hermes client of the home, so T3's per-session
+ * variables stay out, and so does a YOLO inherited from the shell that started T3.
+ */
 export function buildHermesAcpSpawnInput(input: {
   readonly settings: Pick<HermesSettings, "binaryPath" | "homePath">;
   readonly cwd: string;
-  readonly environment?: NodeJS.ProcessEnv;
+  readonly environment: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
   readonly yolo: boolean;
 }): AcpSessionRuntime.AcpSpawnInput {
   const env = buildHermesEnvironment({
     config: input.settings,
     homeDirectory: input.homeDirectory,
-    ...(input.environment === undefined ? {} : { environment: input.environment }),
+    environment: input.environment,
   });
-  // An inherited YOLO from the user's shell must not widen a Supervised session.
   delete env[HERMES_YOLO_MODE_ENV];
   if (input.yolo) env[HERMES_YOLO_MODE_ENV] = "1";
   return {
     command: input.settings.binaryPath || "hermes",
-    args: [...hermesAcpSpawnArgs()],
+    args: [...hermesProfileArgs(env), ...hermesAcpSpawnArgs()],
     cwd: input.cwd,
     env,
+    extendEnv: false,
   };
 }
 

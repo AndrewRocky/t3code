@@ -25,7 +25,6 @@ import {
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
-import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import {
   makeCachedProviderMaintenanceResolution,
   makeManualOnlyProviderMaintenanceCapabilities,
@@ -41,7 +40,7 @@ import { buildHermesAcpSpawnInput, HERMES_DRIVER_KIND } from "./acpSupport.ts";
 import { type HermesAdapterV2DriverEnv, makeHermesAdapterV2Driver } from "./adapter.ts";
 import { syncHermesCommandRules } from "./commandRules.ts";
 import { makeHermesDelegationWatcher, makeHermesLedgerReader } from "./delegations.ts";
-import { buildHermesEnvironment, resolveHermesHomePath } from "./home.ts";
+import { pinHermesHome } from "./home.ts";
 import { HermesRuntimeRegistry } from "./runtime.ts";
 import { makeHermesAdmissionReader } from "./workState.ts";
 import {
@@ -111,19 +110,20 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
     const path = yield* Path.Path;
     const host = yield* ProviderHost.ProviderHost;
     const homeDirectory = yield* HostProcess.HomeDirectory;
-    const settings = { ...config, enabled } satisfies HermesSettings;
-    // Every command the driver runs (probe, skills listing, text generation) must reach the
-    // configured Hermes home: a binary installed under it may not run against another one.
-    const processEnv = buildHermesEnvironment({
-      config: settings,
-      environment: yield* mergeProviderInstanceEnvironment(environment),
-      homeDirectory,
-    });
+    const configuredSettings = { ...config, enabled } satisfies HermesSettings;
     const provideFiles = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
+    // Every command, read and write uses this one home until the instance is rebuilt.
+    const pinned = yield* pinHermesHome(
+      configuredSettings,
+      environment,
+      yield* HostProcess.Environment,
+    ).pipe(provideFiles);
+    const settings = pinned.settings;
+    const processEnv = pinned.environment;
 
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: HERMES_DRIVER_KIND,
@@ -194,8 +194,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
       ]).pipe(Effect.asVoid, provideFiles);
 
     const registry = new HermesRuntimeRegistry();
-    const hermesHome = yield* resolveHermesHomePath(settings, processEnv).pipe(provideFiles);
-    const stateDb = path.join(hermesHome, "state.db");
+    const stateDb = path.join(settings.homePath, "state.db");
     const delegations = yield* makeHermesDelegationWatcher({
       registry,
       readLedger: makeHermesLedgerReader(stateDb),
@@ -211,7 +210,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
         publishCatalog(buildHermesModelsFromSessionModelState(modelState, configOptions)),
       catalogSlugs: () => Ref.getUnsafe(catalog).map((model) => model.slug),
     })
-      .create({ instanceId, displayName, accentColor, environment, enabled, config })
+      .create({ instanceId, displayName, accentColor, environment, enabled, config: settings })
       .pipe(
         Effect.mapError(
           (cause) =>
@@ -250,7 +249,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
       provideFiles,
     );
 
-    const snapshotSettings = yield* makeProviderSnapshotSettingsSource(settings);
+    const snapshotSettings = yield* makeProviderSnapshotSettingsSource(configuredSettings);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<HermesSettings>>({
       resolveMaintenance,
       getSettings: snapshotSettings.getSettings,

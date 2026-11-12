@@ -19,6 +19,8 @@ describe("buildHermesAcpSpawnInput", () => {
       yolo: false,
     });
     expect(supervised.env).not.toHaveProperty("HERMES_YOLO_MODE");
+    // T3's own environment would otherwise be merged back in, YOLO included.
+    expect(supervised.extendEnv).toBe(false);
     expect(supervised.args).toEqual(["acp"]);
 
     const fullAccess = buildHermesAcpSpawnInput({
@@ -29,6 +31,19 @@ describe("buildHermesAcpSpawnInput", () => {
       yolo: true,
     });
     expect(fullAccess.env).toMatchObject({ HERMES_YOLO_MODE: "1" });
+  });
+
+  it("keeps a root home from following a later `hermes profile use`", () => {
+    const spawn = (homePath: string) =>
+      buildHermesAcpSpawnInput({
+        settings: { binaryPath: "", homePath },
+        cwd: "/repo",
+        environment: { PATH: "/bin" },
+        homeDirectory: "/home/me",
+        yolo: false,
+      }).args;
+    expect(spawn("/home/me/.hermes")).toEqual(["--profile", "default", "acp"]);
+    expect(spawn("/home/me/.hermes/profiles/work")).toEqual(["acp"]);
   });
 });
 

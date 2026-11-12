@@ -51,7 +51,7 @@ import {
   hermesAcpVersionArgs,
   resolveHermesAcpBaseModelId,
 } from "./acpSupport.ts";
-import { resolveHermesHomePath } from "./home.ts";
+import { hermesProfileArgs, resolveHermesHomePath } from "./home.ts";
 import { discoverHermesSkills } from "./skills.ts";
 import {
   annotateHermesSkillsWithEnableState,
@@ -239,7 +239,11 @@ const runHermesCommand = Effect.fn("HermesProviderStatus.runHermesCommand")(func
   cwd?: string,
 ) {
   const command = settings.binaryPath || "hermes";
-  const spawnCommand = yield* resolveSpawnCommand(command, [...args], { env: environment });
+  const spawnCommand = yield* resolveSpawnCommand(
+    command,
+    [...hermesProfileArgs(environment), ...args],
+    { env: environment },
+  );
   return yield* spawnAndCollect(
     command,
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
