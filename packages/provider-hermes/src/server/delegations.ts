@@ -3,6 +3,7 @@ import * as NodeSqlite from "node:sqlite";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 
 import type { HermesDispatchedDelegation, HermesRuntimeRegistry } from "./runtime.ts";
@@ -99,37 +100,44 @@ export function hermesChildOutcome(
   return outcomeOf(row.state, undefined, result.error);
 }
 
+function readLedgerRows(
+  databasePath: string,
+  delegationIds: ReadonlyArray<string>,
+): ReadonlyArray<HermesLedgerRow> {
+  const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+  try {
+    database.exec("PRAGMA busy_timeout = 100");
+    const placeholders = delegationIds.map(() => "?").join(", ");
+    const rows = database
+      .prepare(
+        `SELECT delegation_id, state, result_json FROM async_delegations
+         WHERE delegation_id IN (${placeholders})`,
+      )
+      .all(...delegationIds);
+    return rows.flatMap((row): HermesLedgerRow[] =>
+      typeof row.delegation_id === "string" && typeof row.state === "string"
+        ? [
+            {
+              delegationId: row.delegation_id,
+              state: row.state,
+              result: parseJson(row.result_json),
+            },
+          ]
+        : [],
+    );
+  } finally {
+    database.close();
+  }
+}
+
 export const makeHermesLedgerReader =
   (databasePath: string): HermesLedgerReader =>
   (delegationIds) =>
     delegationIds.length === 0
       ? Effect.succeed([])
-      : Effect.try(() => {
-          const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
-          try {
-            database.exec("PRAGMA busy_timeout = 100");
-            const placeholders = delegationIds.map(() => "?").join(", ");
-            const rows = database
-              .prepare(
-                `SELECT delegation_id, state, result_json FROM async_delegations
-                 WHERE delegation_id IN (${placeholders})`,
-              )
-              .all(...delegationIds);
-            return rows.flatMap((row): HermesLedgerRow[] =>
-              typeof row.delegation_id === "string" && typeof row.state === "string"
-                ? [
-                    {
-                      delegationId: row.delegation_id,
-                      state: row.state,
-                      result: parseJson(row.result_json),
-                    },
-                  ]
-                : [],
-            );
-          } finally {
-            database.close();
-          }
-        }).pipe(Effect.orElseSucceed(() => undefined));
+      : Effect.sync(() =>
+          Option.getOrUndefined(Option.liftThrowable(readLedgerRows)(databasePath, delegationIds)),
+        );
 
 interface TrackedChild {
   readonly threadId: string;
