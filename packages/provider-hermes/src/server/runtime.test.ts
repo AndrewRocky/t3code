@@ -195,6 +195,17 @@ describe("makeHermesRuntime", () => {
     }),
   );
 
+  it.effect("reports a new session's own setup, and not a resumed one's", () =>
+    Effect.gen(function* () {
+      const reported: Array<unknown> = [];
+      const onNewSession = (setup: unknown) => Effect.sync(() => void reported.push(setup));
+      yield* setup({}, { onNewSession });
+      expect(reported).toEqual([{}]);
+      yield* setup({}, { onNewSession, resumeSessionId: SESSION });
+      expect(reported).toHaveLength(1);
+    }),
+  );
+
   it.effect("refuses a hidden prompt before a session exists", () =>
     Effect.gen(function* () {
       const base = makeFakeBase();
