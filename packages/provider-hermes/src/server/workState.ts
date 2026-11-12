@@ -1,6 +1,7 @@
 import * as NodeSqlite from "node:sqlite";
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 // ACP has no busy signal, and the gateway runs every admitted prompt whether a
 // viewer is attached or not. This reads that per-session FIFO
@@ -41,24 +42,28 @@ export function hermesSessionBusy(admissions: HermesAdmissions): boolean {
   return admissions.queued + admissions.started > 0;
 }
 
+function readAdmissions(databasePath: string, sessionId: string): HermesAdmissions {
+  const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+  try {
+    database.exec("PRAGMA busy_timeout = 100");
+    const rows = database.prepare(ADMISSIONS_SQL).all(sessionId);
+    let queued = 0;
+    let started = 0;
+    const lost: Array<string> = [];
+    for (const row of rows) {
+      if (row.status === "queued") queued += 1;
+      else if (row.status === "started") started += 1;
+      else if (typeof row.admission_id === "string") lost.push(row.admission_id);
+    }
+    return { queued, started, lost } satisfies HermesAdmissions;
+  } finally {
+    database.close();
+  }
+}
+
 export const makeHermesAdmissionReader =
   (databasePath: string): HermesAdmissionReader =>
   (sessionId) =>
-    Effect.try(() => {
-      const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
-      try {
-        database.exec("PRAGMA busy_timeout = 100");
-        const rows = database.prepare(ADMISSIONS_SQL).all(sessionId);
-        let queued = 0;
-        let started = 0;
-        const lost: Array<string> = [];
-        for (const row of rows) {
-          if (row.status === "queued") queued += 1;
-          else if (row.status === "started") started += 1;
-          else if (typeof row.admission_id === "string") lost.push(row.admission_id);
-        }
-        return { queued, started, lost } satisfies HermesAdmissions;
-      } finally {
-        database.close();
-      }
-    }).pipe(Effect.orElseSucceed(() => undefined));
+    Effect.sync(() =>
+      Option.getOrUndefined(Option.liftThrowable(readAdmissions)(databasePath, sessionId)),
+    );

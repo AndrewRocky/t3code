@@ -7,6 +7,7 @@ import { HermesSettings } from "@t3tools/provider-hermes/settings";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -379,6 +380,8 @@ function hermesVariantOf(
 }
 
 const DEFAULT_HERMES_SETTINGS = Schema.decodeSync(HermesSettings)({ enabled: true });
+const HERMES_BIN = process.env.T3_HERMES_BIN ?? "hermes";
+const RecorderUser = Config.String("USER").pipe(Config.withDefault(""));
 
 const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName: string) {
   const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find((candidate) => candidate.name === fixtureName);
@@ -419,7 +422,7 @@ const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName:
   const tee = makeWireTee();
   const settings = {
     ...DEFAULT_HERMES_SETTINGS,
-    binaryPath: process.env.T3_HERMES_BIN ?? "hermes",
+    binaryPath: HERMES_BIN,
   };
   const hermesHome = environment.HERMES_HOME?.trim() || path.join(homeDirectory, ".hermes");
   const stateDbPath = path.join(hermesHome, "state.db");
@@ -564,7 +567,7 @@ const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName:
         sessionIds: sessionIdsOf(tee.wire),
         workspace: realWorkspace,
         home: homeDirectory,
-        user: process.env.USER ?? "",
+        user: yield* RecorderUser,
         runtimeInstructions: buildRuntimeInstructions({
           harness: "Hermes",
           model: variant.modelSelection.model,
@@ -589,12 +592,16 @@ const recordScenario = Effect.fn("recordHermesScenario")(function* (fixtureName:
     `Wrote ${transcriptEntries.length} Hermes ACP replay entries to ${outputPath}`,
   );
 
-  const liveFailure = yield* Effect.try(() => variant.assertOutput(result, transcript)).pipe(
-    Effect.flip,
-    Effect.option,
-  );
-  if (liveFailure._tag === "Some") {
-    yield* Console.log(`Live orchestration failed ${fixtureName} assertions:`, liveFailure.value);
+  const liveFailure = (() => {
+    try {
+      variant.assertOutput(result, transcript);
+      return undefined;
+    } catch (cause) {
+      return cause;
+    }
+  })();
+  if (liveFailure !== undefined) {
+    yield* Console.log(`Live orchestration failed ${fixtureName} assertions:`, liveFailure);
   }
 });
 
