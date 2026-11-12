@@ -1,4 +1,4 @@
-import type { ServerProviderModel } from "@t3tools/contracts";
+import { ModelCapabilities, type ServerProviderModel } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -52,6 +52,7 @@ import {
   enrichHermesSnapshot,
   HERMES_EMPTY_MODEL_CAPABILITIES,
   hermesModelsFromSettings,
+  withoutProvisionalCustomAliases,
 } from "./status.ts";
 import { makeHermesTextGeneration } from "./textGeneration.ts";
 import { hermesUsageReader, type HermesUsageReaderEnv } from "./usage.ts";
@@ -60,7 +61,14 @@ import { syncHermesWorktreeTrust } from "./worktreeTrust.ts";
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
 const CachedModels = Schema.fromJsonString(
-  Schema.Array(Schema.Struct({ slug: Schema.String, name: Schema.String })),
+  Schema.Array(
+    Schema.Struct({
+      slug: Schema.String,
+      name: Schema.String,
+      // So Effort survives a restart; older files have none.
+      capabilities: Schema.optional(ModelCapabilities),
+    }),
+  ),
 );
 const decodeCachedModels = Schema.decodeUnknownEffect(CachedModels);
 const encodeCachedModels = Schema.encodeSync(CachedModels);
@@ -138,11 +146,11 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
     const initialCatalog = yield* fileSystem.readFileString(catalogPath).pipe(
       Effect.flatMap(decodeCachedModels),
       Effect.map((entries) =>
-        entries.map((entry): ServerProviderModel => ({
+        withoutProvisionalCustomAliases(entries).map((entry): ServerProviderModel => ({
           slug: entry.slug,
           name: entry.name,
           isCustom: false,
-          capabilities: HERMES_EMPTY_MODEL_CAPABILITIES,
+          capabilities: entry.capabilities ?? HERMES_EMPTY_MODEL_CAPABILITIES,
         })),
       ),
       Effect.orElseSucceed((): ReadonlyArray<ServerProviderModel> => []),
@@ -157,16 +165,20 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
     ) {
       if (models.length === 0) return;
       const previous = yield* Ref.getAndSet(catalog, models);
-      if (
-        previous.length === models.length &&
-        previous.every((model, index) => model.slug === models[index]?.slug)
-      ) {
-        return;
-      }
+      // Each new session reports it; only a change, Hermes' default effort included, is published.
+      const content = (entries: ReadonlyArray<ServerProviderModel>) =>
+        JSON.stringify(entries.map(({ slug, name, capabilities }) => [slug, name, capabilities]));
+      if (content(previous) === content(models)) return;
       yield* PubSub.publish(catalogChanges, models);
       yield* writeFileStringAtomically({
         filePath: catalogPath,
-        contents: encodeCachedModels(models.map(({ slug, name }) => ({ slug, name }))),
+        contents: encodeCachedModels(
+          models.map(({ slug, name, capabilities }) => ({
+            slug,
+            name,
+            ...(capabilities === null ? {} : { capabilities }),
+          })),
+        ),
       }).pipe(
         provideFiles,
         Effect.catchCause((cause) =>
@@ -197,6 +209,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
       beforeSpawn: syncConfig,
       onModelsDiscovered: (modelState, configOptions) =>
         publishCatalog(buildHermesModelsFromSessionModelState(modelState, configOptions)),
+      catalogSlugs: () => Ref.getUnsafe(catalog).map((model) => model.slug),
     })
       .create({ instanceId, displayName, accentColor, environment, enabled, config })
       .pipe(

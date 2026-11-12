@@ -119,6 +119,13 @@ export interface HermesRuntimeOptions {
   /** The session `start` reattaches to; a busy one is retried once Hermes idles. */
   readonly resumeSessionId?: string;
   /**
+   * A new session's own setup, before T3 configures it: Hermes' defaults and
+   * its full model list. A resumed session reports what it last ran with.
+   */
+  readonly onNewSession?: (
+    setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
+  ) => Effect.Effect<void>;
+  /**
    * T3's MCP servers, when the viewer reattached without them because Hermes
    * was busy: Hermes swaps a session's servers only while idle, so they are
    * handed over by a reload at the next idle point.
@@ -814,7 +821,13 @@ export const makeHermesRuntime = Effect.fn("HermesRuntime.make")(function* (
     start: () =>
       settingUp(
         options.resumeSessionId === undefined
-          ? base.start()
+          ? base
+              .start()
+              .pipe(
+                Effect.tap(
+                  (started) => options.onNewSession?.(started.sessionSetupResult) ?? Effect.void,
+                ),
+              )
           : afterHermesIdles(options.resumeSessionId, base.start()),
         options.launchYolo,
       ).pipe(Effect.tap(() => swapMcpServersIfIdle())),

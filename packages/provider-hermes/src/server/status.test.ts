@@ -4,6 +4,8 @@ import {
   buildHermesModelsFromSessionModelState,
   hermesAuthFromInitialize,
   isSupportedHermesVersion,
+  resolveProvisionalCustomAlias,
+  withoutProvisionalCustomAliases,
 } from "./status.ts";
 
 describe("isSupportedHermesVersion", () => {
@@ -105,6 +107,50 @@ describe("buildHermesModelsFromSessionModelState", () => {
           expect.objectContaining({ id: "high" }),
         ],
       }),
+    ]);
+  });
+});
+
+describe("resolveProvisionalCustomAlias", () => {
+  const catalog = ["custom:local-gateway:rnd-glm", "custom:local-gateway:fast", "openai:gpt-5"];
+
+  it("moves a thread on the provisional id to its endpoint's own id", () => {
+    expect(resolveProvisionalCustomAlias("custom:rnd-glm", catalog)).toBe(
+      "custom:local-gateway:rnd-glm",
+    );
+    expect(resolveProvisionalCustomAlias("custom:local-gateway:fast", catalog)).toBe(
+      "custom:local-gateway:fast",
+    );
+    expect(resolveProvisionalCustomAlias("openai:gpt-5", catalog)).toBe("openai:gpt-5");
+  });
+
+  it("keeps an id the catalog offers, or one no single endpoint claims", () => {
+    // A plain custom endpoint's model is its own id.
+    expect(resolveProvisionalCustomAlias("custom:rnd-glm", ["custom:rnd-glm"])).toBe(
+      "custom:rnd-glm",
+    );
+    expect(
+      resolveProvisionalCustomAlias("custom:rnd-glm", [
+        "custom:local-gateway:rnd-glm",
+        "custom:backup:rnd-glm",
+      ]),
+    ).toBe("custom:rnd-glm");
+    expect(resolveProvisionalCustomAlias("custom:rnd-glm", [])).toBe("custom:rnd-glm");
+  });
+});
+
+describe("withoutProvisionalCustomAliases", () => {
+  it("drops a saved provisional id whose endpoint id is saved too", () => {
+    const saved = [
+      { slug: "custom:rnd-glm" },
+      { slug: "custom:local-gateway:rnd-glm" },
+      { slug: "custom:fast" },
+      { slug: "openai:gpt-5" },
+    ];
+    expect(withoutProvisionalCustomAliases(saved).map(({ slug }) => slug)).toEqual([
+      "custom:local-gateway:rnd-glm",
+      "custom:fast",
+      "openai:gpt-5",
     ]);
   });
 });

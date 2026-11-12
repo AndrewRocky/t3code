@@ -32,12 +32,13 @@ exception of `HERMES_HOME`. Configure tools, `PATH` and API keys in Hermes itsel
 
 ## Models
 
-The model picker shows the models Hermes offered the last time a Hermes session
-started, and keeps them between restarts. To load them before your first thread,
+The model picker shows the models Hermes offered the last time T3 Code opened a new
+Hermes session, and keeps them between restarts. To load them before your first thread,
 refresh provider status in **Settings → Providers**; that opens one short session in
 Hermes' history. **Default** keeps whatever model Hermes is configured to use. Model ids include their provider, such as
 `openrouter:qwen/qwen3-coder`, and a custom model must include it too. **Effort** sets
-Hermes' reasoning effort for the conversation, whichever model you pick.
+Hermes' reasoning effort for the conversation, whichever model you pick. Until you pick
+one, Hermes uses its configured default, which the picker shows.
 
 ## Permission modes
 

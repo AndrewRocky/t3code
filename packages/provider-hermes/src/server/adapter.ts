@@ -14,6 +14,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -58,6 +59,7 @@ import {
 import { decorateHermesAdapter } from "./session.ts";
 import { type HermesAdmissionReader, hermesSessionBusy } from "./workState.ts";
 import { discoverHermesSkills } from "./skills.ts";
+import { resolveProvisionalCustomAlias } from "./status.ts";
 import { extractHermesSubagentUpdate } from "./subagents.ts";
 import { normalizeHermesToolCall } from "./toolCalls.ts";
 
@@ -144,11 +146,17 @@ export interface HermesAdapterV2Options {
   readonly readAdmissions?: HermesAdmissionReader;
   /** Runs before each `hermes acp` spawn: the daemon reads `config.yaml` when a session starts. */
   readonly beforeSpawn?: (cwd: string) => Effect.Effect<void>;
-  /** The live model catalog from each session Hermes opens. */
+  /**
+   * The model catalog from each new session, before T3 configures it. The
+   * shared adapter's later model state is `session/new`'s list under the model
+   * T3 applied, and its options carry the thread's own choices.
+   */
   readonly onModelsDiscovered?: (
-    modelState: Parameters<NonNullable<AcpAdapterV2Flavor["onSessionConfigurationUpdate"]>>[2],
-    configOptions: Parameters<NonNullable<AcpAdapterV2Flavor["onSessionConfigurationUpdate"]>>[0],
+    modelState: EffectAcpSchema.NewSessionResponse["models"],
+    configOptions: EffectAcpSchema.NewSessionResponse["configOptions"],
   ) => Effect.Effect<void>;
+  /** The discovered catalog's slugs, which a stale custom-endpoint alias resolves against. */
+  readonly catalogSlugs?: () => ReadonlyArray<string>;
   /** Replaces the spawned `hermes acp` process; the decorator still wraps it. */
   readonly makeBaseRuntime?: (
     input: AcpAdapterV2RuntimeInput,
@@ -203,6 +211,14 @@ function makeHermesAcpAdapterFlavor(
       Effect.provideService(FileSystem.FileSystem, services.fileSystem),
       Effect.provideService(Path.Path, services.path),
     );
+  const customModels = options.settings.customModels.map((model) =>
+    typeof model === "string" ? model : model.slug,
+  );
+  const onNewSession =
+    options.onModelsDiscovered === undefined
+      ? undefined
+      : (setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"]) =>
+          options.onModelsDiscovered!(setup.models, setup.configOptions);
   return {
     driver: HERMES_PROVIDER,
     runtimeHarness: "Hermes",
@@ -212,13 +228,14 @@ function makeHermesAcpAdapterFlavor(
     // let a v1 agent opt in without the faked protocol version).
     followAgentWorkState: true,
     supportsCompaction: true,
-    customModels: options.settings.customModels.map((model) =>
-      typeof model === "string" ? model : model.slug,
-    ),
-    resolveModelId: (selection) =>
-      selection.model === HERMES_DEFAULT_MODEL_SLUG
-        ? ""
-        : (resolveHermesAcpBaseModelId(selection.model) ?? ""),
+    customModels,
+    resolveModelId: (selection) => {
+      if (selection.model === HERMES_DEFAULT_MODEL_SLUG) return "";
+      const model = resolveHermesAcpBaseModelId(selection.model) ?? "";
+      return options.catalogSlugs === undefined || customModels.includes(model)
+        ? model
+        : resolveProvisionalCustomAlias(model, options.catalogSlugs());
+    },
     sessionModeForPolicy: (policy) => hermesModeIdForRuntimeMode(hermesLaunchRuntimeMode(policy)),
     makeRuntime: Effect.fn("HermesAdapter.makeRuntime")(function* (input) {
       const threadId = yield* AgentScopeThreadId;
@@ -262,6 +279,7 @@ function makeHermesAcpAdapterFlavor(
         // The adapter follows work state only when it can start continuation runs.
         followWorkState: options.continuationRequests !== undefined,
         ...(resumeId === undefined ? {} : { resumeSessionId: resumeId }),
+        ...(onNewSession === undefined ? {} : { onNewSession }),
         ...(deferMcpServers ? { deferredMcpServers: input.mcpServers } : {}),
         ...(threadId === undefined
           ? {}
@@ -297,12 +315,6 @@ function makeHermesAcpAdapterFlavor(
       Effect.sync(() => registry.attachExtensions(runtime, { finishSubagent })),
     extractSubagentUpdate: extractHermesSubagentUpdate,
     normalizeToolCall: normalizeHermesToolCall,
-    ...(options.onModelsDiscovered === undefined
-      ? {}
-      : {
-          onSessionConfigurationUpdate: (configOptions, _modeState, modelState) =>
-            options.onModelsDiscovered!(modelState, configOptions),
-        }),
     ...(options.assertComplete === undefined ? {} : { assertComplete: options.assertComplete }),
   };
 }
@@ -349,6 +361,7 @@ export const makeHermesAdapterV2Driver = (
     | "readAdmissions"
     | "beforeSpawn"
     | "onModelsDiscovered"
+    | "catalogSlugs"
   > = {},
 ): ProviderAdapterDriver<HermesSettings, HermesAdapterV2DriverEnv> => ({
   driverKind: HERMES_DRIVER_KIND,

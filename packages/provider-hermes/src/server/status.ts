@@ -114,6 +114,14 @@ export function hermesModelsFromSettings(
   return providerModelsFromSettings(discovered, customModels ?? [], capabilities);
 }
 
+/** The model of a named custom endpoint's id, `custom:<endpoint>:<model>`. */
+function namedEndpointModel(id: string): string | undefined {
+  if (!id.startsWith("custom:")) return undefined;
+  const rest = id.slice("custom:".length);
+  const separator = rest.indexOf(":");
+  return separator > 0 ? rest.slice(separator + 1) : undefined;
+}
+
 /**
  * Before its first turn, a session on a named custom endpoint reports itself as
  * `custom:<model>`, then as `custom:<endpoint>:<model>`; the first id stops working.
@@ -121,11 +129,31 @@ export function hermesModelsFromSettings(
 function isProvisionalCustomAlias(modelState: EffectAcpSchema.SessionModelState, id: string) {
   if (id !== modelState.currentModelId || !id.startsWith("custom:")) return false;
   const model = id.slice("custom:".length);
-  return modelState.availableModels.some(({ modelId }) => {
-    const rest = modelId.startsWith("custom:") ? modelId.slice("custom:".length) : "";
-    const separator = rest.indexOf(":");
-    return separator > 0 && rest.slice(separator + 1) === model;
-  });
+  return modelState.availableModels.some(({ modelId }) => namedEndpointModel(modelId) === model);
+}
+
+/** A catalog saved by an earlier build can still hold the provisional id beside the endpoint's own. */
+export function withoutProvisionalCustomAliases<T extends { readonly slug: string }>(
+  models: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const named = new Set(models.flatMap(({ slug }) => namedEndpointModel(slug) ?? []));
+  return models.filter(
+    ({ slug }) => !(slug.startsWith("custom:") && named.has(slug.slice("custom:".length))),
+  );
+}
+
+/**
+ * A thread still on that provisional id, picked before the catalog hid it, moves to
+ * the endpoint's own id when exactly one endpoint in the catalog offers the model.
+ */
+export function resolveProvisionalCustomAlias(
+  model: string,
+  catalog: ReadonlyArray<string>,
+): string {
+  if (!model.startsWith("custom:") || catalog.includes(model)) return model;
+  const name = model.slice("custom:".length);
+  const named = catalog.filter((slug) => namedEndpointModel(slug) === name);
+  return named.length === 1 ? named[0]! : model;
 }
 
 /** Hermes' effort is a session setting (`reasoning_effort`), offered for every model. */
