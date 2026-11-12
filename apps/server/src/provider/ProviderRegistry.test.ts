@@ -918,6 +918,45 @@ it.layer(
       );
     });
 
+    it("drops Hermes models its catalog no longer lists", () => {
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("hermes"),
+        driver: ProviderDriverKind.make("hermes"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-12T00:00:00.000Z",
+        version: "0.23.1",
+        models: [
+          { slug: "custom:gateway:rnd-glm", name: "rnd-glm", isCustom: false, capabilities: null },
+          { slug: "custom:rnd-glm", name: "custom · rnd-glm", isCustom: false, capabilities: null },
+        ],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const refreshedProvider = {
+        ...previousProvider,
+        checkedAt: "2026-11-12T00:01:00.000Z",
+        models: [previousProvider.models[0]],
+      } satisfies ServerProvider;
+      // Before any Hermes session has reported a catalog, the cached models stand in.
+      const uncatalogedProvider = {
+        ...previousProvider,
+        checkedAt: "2026-11-12T00:02:00.000Z",
+        models: [],
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previousProvider, refreshedProvider).models,
+        [previousProvider.models[0]],
+      );
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previousProvider, uncatalogedProvider).models,
+        [...previousProvider.models],
+      );
+    });
+
     it("retains stale OpenCode models when a refresh fails", () => {
       const previousProvider = {
         instanceId: ProviderInstanceId.make("opencode"),

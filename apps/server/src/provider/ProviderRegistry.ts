@@ -201,6 +201,12 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
     return !(provider.installed && provider.status === "ready");
   }
 
+  if (provider.driver === ProviderDriverKind.make("hermes")) {
+    // Hermes lists its own catalog, which its driver keeps across restarts: once it has
+    // one, a model missing from it is one Hermes no longer offers.
+    return !provider.models.some((model) => !model.isCustom);
+  }
+
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
   const isCodex = provider.driver === ProviderDriverKind.make("codex");
   if (!isAntigravity && !isCodex && provider.driver !== ProviderDriverKind.make("opencode")) {
