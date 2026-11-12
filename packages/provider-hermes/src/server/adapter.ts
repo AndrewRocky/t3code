@@ -30,7 +30,6 @@ import {
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "@t3tools/provider-core/server/adapterDriver";
-import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import {
   AcpProviderCapabilitiesV2,
   makeAcpAdapterV2,
@@ -49,7 +48,7 @@ import {
   hermesYoloForMode,
   resolveHermesAcpBaseModelId,
 } from "./acpSupport.ts";
-import { buildHermesEnvironment } from "./home.ts";
+import { pinHermesHome } from "./home.ts";
 import { hostHermesMediaTagOptions, type HermesMediaTagOptions } from "./mediaTags.ts";
 import {
   type HermesDispatchedDelegation,
@@ -182,7 +181,7 @@ export const spawnHermesRuntime = Effect.fn("HermesAdapter.spawnRuntime")(
         spawn: buildHermesAcpSpawnInput({
           settings: options.settings,
           cwd: input.cwd,
-          environment: input.processEnvironment ?? options.environment,
+          environment: options.environment,
           homeDirectory: options.homeDirectory,
           yolo: launch.yolo,
         }),
@@ -375,15 +374,15 @@ export const makeHermesAdapterV2Driver = (
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
+      const pinned = yield* pinHermesHome(
+        { ...input.config, enabled: input.enabled },
+        input.environment,
+        hostEnvironment,
+      );
       return yield* makeHermesAdapterV2({
         instanceId: input.instanceId,
-        settings: { ...input.config, enabled: input.enabled },
-        // Skills listed for a turn's `$skill` directive come from the configured Hermes home.
-        environment: buildHermesEnvironment({
-          config: input.config,
-          environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
-          homeDirectory,
-        }),
+        settings: pinned.settings,
+        environment: pinned.environment,
         homeDirectory,
         selfInvocation,
         continuationRequests,

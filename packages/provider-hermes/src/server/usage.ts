@@ -11,7 +11,7 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import type { HermesSettings } from "../settings.ts";
-import { resolveHermesHomePath } from "./home.ts";
+import { resolveHermesActiveHome } from "./home.ts";
 
 // Hermes keeps running totals per session, model and task, not per call, so a
 // record is dated by its row's last activity.
@@ -137,7 +137,7 @@ export const hermesUsageReader: ProviderUsageReader<HermesSettings, HermesUsageR
     // Instances sharing a Hermes home share one ledger, so it counts once.
     const homes = new Set<string>();
     for (const instance of instances) {
-      const home = yield* resolveHermesHomePath(
+      const home = yield* resolveHermesActiveHome(
         instance.config ?? { homePath: "" },
         instance.environment,
       );

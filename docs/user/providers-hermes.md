@@ -17,7 +17,16 @@ If T3 Code reports that the ACP adapter is missing, re-run the Hermes installer,
 install the `acp` extra in your Hermes checkout.
 
 Set **HERMES_HOME path** to use a Hermes home other than `~/.hermes`. It holds
-`config.yaml`, your credentials, skills and history.
+`config.yaml`, your credentials, skills and history. A Hermes profile is a home too:
+use `~/.hermes/profiles/<name>`. With the path empty or set to `~/.hermes`, T3 Code
+follows `hermes profile use` as Hermes does, and keeps the profile it found until it
+restarts or the provider's settings change.
+
+To keep T3 Code's command rules, worktree trust and history apart from your own
+Hermes use, give it a profile of its own with `hermes profile create t3code --clone`
+and point **HERMES_HOME path** at it. To use a different profile in one project, add
+a second Hermes provider instance for it and enable that instance only in that
+project.
 
 ### Hermes runs as a background service
 
@@ -26,9 +35,10 @@ starts it if needed. The service is shared: the Hermes CLI, Hermes Desktop and
 every T3 Code thread use the same one, and T3 Code threads appear in Hermes' own
 session history.
 
-Tools run in the service's environment, not T3 Code's. Environment variables you
-set on the provider instance in T3 Code do not reach Hermes' commands, with the
-exception of `HERMES_HOME`. Configure tools, `PATH` and API keys in Hermes itself.
+Tools run in the service's environment, which is that of whichever program started
+it. Environment variables you set on the provider instance in T3 Code are not passed
+to Hermes, except that a `HERMES_HOME` there selects the Hermes home. Configure tools,
+`PATH` and API keys in Hermes itself.
 
 ## Models
 

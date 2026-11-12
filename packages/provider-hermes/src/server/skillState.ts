@@ -7,6 +7,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import type { HermesSettings } from "../settings.ts";
+import { hermesProfileArgs } from "./home.ts";
 
 // The scan owns existence; `hermes skills list --enabled-only` owns eligibility
 // (denylists, gates, the trusted-project quarantine). The listing has no `--json`,
@@ -106,7 +107,7 @@ export const discoverHermesEnabledSkillNames = Effect.fn("discoverHermesEnabledS
     const result = yield* Effect.gen(function* () {
       const spawnCommand = yield* resolveSpawnCommand(
         command,
-        ["skills", "list", "--enabled-only"],
+        [...hermesProfileArgs(listingEnvironment), "skills", "list", "--enabled-only"],
         { env: listingEnvironment },
       );
       return yield* spawnAndCollect(
