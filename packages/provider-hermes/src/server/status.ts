@@ -426,7 +426,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
       version,
       status: "error",
       auth: { status: "unknown" },
-      message: `Hermes ${version ?? ""} runs the old in-process ACP server. Update Hermes to 0.23.0 or later.`,
+      message: `Hermes ${version ?? ""} runs the old in-process ACP server. Update Hermes to 0.23.4 or later.`,
     });
   }
 

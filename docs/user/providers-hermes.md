@@ -6,7 +6,7 @@ providers you configure in Hermes.
 
 ## Set up Hermes
 
-1. Install Hermes 0.22.3 or newer on the environment; 0.23.0 or newer is
+1. Install Hermes 0.22.3 or newer on the environment; 0.23.4 or newer is
    recommended. Older releases run a different ACP server that T3 Code does not
    support. Run `hermes --version` to check.
 2. Run `hermes model` once to pick a provider and sign in.

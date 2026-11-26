@@ -114,7 +114,7 @@ describe("provider compatibility", () => {
         ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
       ).compatibilityAdvisory;
       assert.strictEqual(advisory?.status, expected, `Hermes ${version}`);
-      assert.strictEqual(advisory?.recommendedRange, ">=0.22.5");
+      assert.strictEqual(advisory?.recommendedRange, ">=0.23.4");
     }
   });
 

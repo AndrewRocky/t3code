@@ -54,7 +54,7 @@
     {
       "driver": "hermes",
       "t3CodeRange": ">=0.1.0",
-      "recommendedRange": ">=0.22.5",
+      "recommendedRange": ">=0.23.4",
       "ranges": [
         { "range": ">=0.22.3", "status": "supported" },
         { "range": "<0.22.3", "status": "unsupported" }
