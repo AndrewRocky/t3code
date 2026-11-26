@@ -12970,5 +12970,20 @@
   "201490988858b511": "retirada por {by}",
   "99451a5d2d40440f": "Retirada por {by}.",
   "3ee30a50b70fffab": "Retirada por {by}: {reason}",
-  "92e129bf413a1220": "retirada"
+  "92e129bf413a1220": "retirada",
+  "7a8904e400d6a3dd": "Enter a command pattern.",
+  "d9f25a1ba5381a45": "That pattern is already in the list.",
+  "447ba33b9aff534c": "Remove {pattern}",
+  "0ea88bab90b019ce": "Always allow",
+  "8867d5e66d4228ef": "Matching commands run without asking, in any permission mode. Commands with shell operators such as && or ; still ask.",
+  "109fba4aa591fd35": "Always block",
+  "7a310c7b7229146d": "Matching commands are refused, even in Full access.",
+  "ed5335fc86dbdfce": "Glob patterns Hermes checks itself before a shell command reaches T3 Code for approval. Let routine commands through without a prompt, and block the ones that should never run. Changes reach Hermes' own config the next time a session starts.",
+  "daa8bce8e8afb5e9": "Command rules",
+  "b6d7240b6ecc86c1": "Path to the Hermes CLI binary.",
+  "7d1d5e4ef72cc202": "HERMES_HOME path",
+  "b22e6b380f72b5d6": "Hermes home directory holding config.yaml, .env, state.db and skills. It also selects which Hermes gateway daemon serves this instance.",
+  "a18356335bdc1b2b": "Trust worktrees of trusted projects",
+  "4a7966d628eb9fe2": "Load project skills in git worktrees of a project trusted with `hermes skills trust`. A worktree can check out another branch, so its skills may differ from the trusted checkout's.",
+  "edfc2287e8195629": "hermes"
 }

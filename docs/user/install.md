@@ -281,6 +281,7 @@ greater than 2147483647; unset or invalid values keep the defaults.
 | Antigravity         | `T3CODE_ANTIGRAVITY_PROBE_TIMEOUT_MS`  |
 | Grok                | `T3CODE_GROK_PROBE_TIMEOUT_MS`         |
 | Kiro                | `T3CODE_KIRO_PROBE_TIMEOUT_MS`         |
+| Hermes              | `T3CODE_HERMES_PROBE_TIMEOUT_MS`       |
 | fx                  | `T3CODE_FX_PROBE_TIMEOUT_MS`           |
 | Pi                  | `T3CODE_PI_PROBE_TIMEOUT_MS`           |
 | Muse Code           | `T3CODE_MUSE_PROBE_TIMEOUT_MS`         |

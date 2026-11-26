@@ -202,6 +202,21 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
     msg("Path to the fx binary. All fx instances on this machine share its fx login."),
   ],
   ["Path to the Grok CLI binary.", msg("Path to the Grok CLI binary.")],
+  ["Path to the Hermes CLI binary.", msg("Path to the Hermes CLI binary.")],
+  ["HERMES_HOME path", msg("HERMES_HOME path")],
+  [
+    "Hermes home directory holding config.yaml, .env, state.db and skills. It also selects which Hermes gateway daemon serves this instance.",
+    msg(
+      "Hermes home directory holding config.yaml, .env, state.db and skills. It also selects which Hermes gateway daemon serves this instance.",
+    ),
+  ],
+  ["Trust worktrees of trusted projects", msg("Trust worktrees of trusted projects")],
+  [
+    "Load project skills in git worktrees of a project trusted with `hermes skills trust`. A worktree can check out another branch, so its skills may differ from the trusted checkout's.",
+    msg(
+      "Load project skills in git worktrees of a project trusted with `hermes skills trust`. A worktree can check out another branch, so its skills may differ from the trusted checkout's.",
+    ),
+  ],
   ["Path to the Kiro CLI binary.", msg("Path to the Kiro CLI binary.")],
   [
     "Path to the Muse Code binary on this environment. Sign in with muse login on that host.",

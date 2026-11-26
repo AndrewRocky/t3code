@@ -1467,7 +1467,7 @@ export function ProviderInstanceCard({
 
       {instance.driver === "hermes" ? (
         <SettingsSection
-          title="Command rules"
+          title={gt("Command rules")}
           inert={readOnly}
           aria-disabled={readOnly || undefined}
           className={readOnly ? "opacity-50 select-none" : undefined}

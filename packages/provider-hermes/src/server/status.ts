@@ -33,6 +33,7 @@ import {
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
+  resolveProviderProbeTimeoutMs,
   spawnAndCollect,
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
@@ -389,7 +390,9 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
   }
 
   const versionResult = yield* runHermesCommand(settings, hermesAcpVersionArgs(), environment).pipe(
-    Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("hermes", VERSION_PROBE_TIMEOUT_MS, environment),
+    ),
     Effect.result,
   );
   if (Result.isFailure(versionResult)) {
@@ -428,7 +431,9 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
   }
 
   const checkResult = yield* runHermesCommand(settings, hermesAcpCheckArgs(), environment).pipe(
-    Effect.timeoutOption(ACP_CHECK_TIMEOUT_MS),
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("hermes", ACP_CHECK_TIMEOUT_MS, environment),
+    ),
     Effect.result,
   );
   const checkPassed =
@@ -453,7 +458,12 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     environment,
     input.homeDirectory,
     input.cwd,
-  ).pipe(Effect.timeoutOption(ACP_INITIALIZE_TIMEOUT_MS), Effect.exit);
+  ).pipe(
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("hermes", ACP_INITIALIZE_TIMEOUT_MS, environment),
+    ),
+    Effect.exit,
+  );
   const initialized = Exit.isSuccess(initializeExit)
     ? Option.getOrUndefined(initializeExit.value)
     : undefined;

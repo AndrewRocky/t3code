@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react";
 import { PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -21,17 +22,18 @@ function CommandPatternList({
   patterns,
   onChange,
 }: CommandPatternListProps) {
+  const gt = useGT();
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const handleAdd = () => {
     const trimmed = input.trim();
     if (!trimmed) {
-      setError("Enter a command pattern.");
+      setError(gt("Enter a command pattern."));
       return;
     }
     if (patterns.includes(trimmed)) {
-      setError("That pattern is already in the list.");
+      setError(gt("That pattern is already in the list."));
       return;
     }
     onChange([...patterns, trimmed]);
@@ -56,7 +58,7 @@ function CommandPatternList({
               <button
                 type="button"
                 className="text-muted-foreground/70 hover:text-foreground"
-                aria-label={`Remove ${pattern}`}
+                aria-label={gt("Remove {pattern}", { pattern })}
                 onClick={() => onChange(patterns.filter((existing) => existing !== pattern))}
               >
                 <XIcon className="size-3" />
@@ -84,7 +86,7 @@ function CommandPatternList({
         <div className="shrink-0">
           <Button variant="outline" onClick={handleAdd}>
             <PlusIcon className="size-3.5" />
-            Add
+            <T>Add</T>
           </Button>
         </div>
       </div>
@@ -114,25 +116,32 @@ export function HermesCommandRulesSection({
   onCommandAllowlistChange,
   onCommandDenylistChange,
 }: HermesCommandRulesSectionProps) {
+  const gt = useGT();
   return (
     <div className="space-y-5">
       <p className="text-xs text-muted-foreground">
-        Glob patterns Hermes checks itself before a shell command reaches T3 Code for approval. Let
-        routine commands through without a prompt, and block the ones that should never run. Changes
-        reach Hermes&apos; own config the next time a session starts.
+        <T>
+          Glob patterns Hermes checks itself before a shell command reaches T3 Code for approval.
+          Let routine commands through without a prompt, and block the ones that should never run.
+          Changes reach Hermes&apos; own config the next time a session starts.
+        </T>
       </p>
       <CommandPatternList
         idPrefix={`provider-instance-${instanceId}-command-allowlist`}
-        label="Always allow"
-        description="Matching commands run without asking, in any permission mode. Commands with shell operators such as && or ; still ask."
+        label={gt("Always allow")}
+        description={gt(
+          "Matching commands run without asking, in any permission mode. Commands with shell operators such as && or ; still ask.",
+        )}
+        // oxlint-disable-next-line t3code/no-untranslated-copy -- example command pattern
         placeholder="git status*"
         patterns={commandAllowlist}
         onChange={onCommandAllowlistChange}
       />
       <CommandPatternList
         idPrefix={`provider-instance-${instanceId}-command-denylist`}
-        label="Always block"
-        description="Matching commands are refused, even in Full access."
+        label={gt("Always block")}
+        description={gt("Matching commands are refused, even in Full access.")}
+        // oxlint-disable-next-line t3code/no-untranslated-copy -- example command pattern
         placeholder="sudo *"
         patterns={commandDenylist}
         onChange={onCommandDenylistChange}
